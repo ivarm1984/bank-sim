@@ -165,6 +165,29 @@ the "Complex additions" section below.
 - [ ] Centralized logging: ELK or Loki
 - [ ] Data lake / CDC: Debezium off Postgres into a data lake
 
+## Gamification — CEO mode (later)
+
+A game layer on top of Treasury (M6): you set policy periodically, agents react
+autonomously, and regulatory ratios drive win/lose — not something to build until
+Treasury/Loans exist to control. Separate milestone once M6 is done.
+
+- [ ] Policy levers (REST-exposed, like the clock controls): savings rate, loan
+      spread, underwriting looseness (risk appetite), target capital buffer vs.
+      how much to lend out, whether to tap the central bank borrowing facility
+      when short — agents (deposit/loan agents) react to these rather than you
+      touching individual transactions
+- [ ] `BankHealthService`: state machine watching `TreasuryRatiosUpdatedEvent` —
+      capital ratio below the CRR minimum for N consecutive days → regulator
+      warning; a second breach → forced resolution (game over); liquidity
+      exhausted against withdrawal demand → "bank run" failure mode
+- [ ] Win condition: survive a target number of simulated years, or hit a
+      profit/capital-growth target
+- [ ] `EventInjector`: occasional macro shocks to react to rather than steady-state
+      optimization — central-bank rate hike/cut, a recession event that spikes
+      loan defaults, a deposit-run event (bad press / a competitor rate war)
+- [ ] Frontend: CEO control panel (levers) + bank-health/score view, separate from
+      the operational dashboard from M5
+
 ## Complex additions (deferred domain depth)
 
 Deliberately simplified in M6 above — revisit once the simple version works
