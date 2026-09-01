@@ -1,12 +1,13 @@
 # Bank Simulation — TODO
 
 Learning project: simulate a bank end-to-end to learn banking-domain concepts
-(double-entry ledgers, deposits/withdrawals/transfers, interest, statements) and
-system-design/tooling concepts (sync vs. async service interaction, event-driven
-batch processing, live UIs — and later, real message brokers, observability/logging,
-data-lake/CDC). "Customers" are plain programmed agents (no AI) acting on a
-controllable simulated clock (step one day, or run continuously at a chosen speed).
-A Vue dashboard shows balances and a live event feed and controls the simulation.
+(double-entry ledgers, deposits/loans/transfers, interest, statements, treasury
+and EU regulatory ratios) and system-design/tooling concepts (sync vs. async
+service interaction, event-driven batch processing, live UIs — and later, real
+message brokers, observability/logging, data-lake/CDC). "Customers" are plain
+programmed agents (no AI) acting on a controllable simulated clock (step one day,
+or run continuously at a chosen speed). A Vue dashboard shows balances and a live
+event feed and controls the simulation.
 
 Stack: Java + Spring Boot backend, Vue 3 + TypeScript frontend, Postgres.
 Architecture: **modular monolith** first (package-by-domain, single deployable app),
@@ -112,6 +113,49 @@ checklist below is the actionable build order.
       devtools), balances update live, speed/Pause/Step Day work, WS-driven UI
       state matches `GET /api/accounts` REST truth
 
+## M6 — Treasury & loans (simplified)
+
+The bank's own balance-sheet management, separate from customer-facing services.
+Simple version for now: fixed-rate amortizing loans, no default risk; single
+aggregate ratios rather than full EU breakdowns. Deeper versions of both are in
+the "Complex additions" section below.
+
+- [ ] `treasury` package: new ledger accounts — `CENTRAL_BANK_RESERVES` (asset),
+      `LOAN_RECEIVABLE` per loan (asset), `BANK_CAPITAL` (equity); seed bank
+      capital at startup
+- [ ] Simulated **central bank counterparty**: policy rate (ECB main
+      refinancing rate analog), deposit facility rate (paid on excess reserves),
+      marginal lending rate (charged when the bank borrows to cover a shortfall)
+      — this is the base rate loan/deposit pricing builds on
+- [ ] `loan` package: `LoanAccount` (principal, term, rate = base + risk spread,
+      amortization schedule)
+- [ ] `LoanService.originate/disburse/repay` — disbursement: Debit
+      `LOAN_RECEIVABLE`, Credit customer's checking account; each repayment
+      splits principal vs. interest income, one `@Transactional` posting per
+      payment
+- [ ] `TreasuryService` — recomputes simplified ratios from aggregate ledger
+      totals (end of day, chained off the existing batch, or on demand):
+  - Loan-to-Deposit Ratio (LDR) — internal risk metric, not directly regulated
+  - Liquidity Coverage Ratio (LCR), single number: reserves/HQLA ÷ estimated
+    30-day net outflow — EU minimum 100% (CRR / Delegated Reg. 2015/61)
+  - Net Stable Funding Ratio (NSFR), single number: stable funding ÷ required
+    stable funding — EU minimum 100% (CRR2, since June 2021)
+  - Minimum reserve requirement — ECB requires ~1% of certain short-term
+    liabilities held as central bank reserves (monetary-policy mechanic, not
+    solvency)
+  - Capital Adequacy Ratio — simplified CET1 vs. a rough risk-weighted-assets
+    estimate; EU minimums 4.5% CET1 / 8% total capital + buffers (CRR)
+- [ ] Feedback loop: if LCR/NSFR/capital ratio breaches its threshold, treasury
+      either throttles new loan origination or auto-borrows reserves from the
+      central bank facility; publishes `TreasuryRatiosUpdatedEvent`
+- [ ] REST: `GET /api/treasury/ratios`, `POST /api/loans`,
+      `GET /api/accounts/{id}/loans`, `GET /api/loans/{id}`
+- [ ] `BorrowerAgent`: applies for a loan occasionally, then pays on schedule
+      via `AgentScheduler` (like `BillPayAgent`, but the debt amortizes)
+- [ ] Verify: loan disbursement/repayment keeps trial balance at zero; ratios
+      update after a loan is originated (LDR moves, LCR/NSFR react); forcing a
+      large loan pushes LCR below 100% and triggers the throttle/borrow path
+
 ---
 
 ## Later phases (not started yet)
@@ -120,3 +164,25 @@ checklist below is the actionable build order.
 - [ ] Observability: Micrometer + Prometheus + Grafana
 - [ ] Centralized logging: ELK or Loki
 - [ ] Data lake / CDC: Debezium off Postgres into a data lake
+
+## Complex additions (deferred domain depth)
+
+Deliberately simplified in M6 above — revisit once the simple version works
+end-to-end.
+
+- [ ] Loan default/delinquency simulation: `BorrowerAgent` that can miss
+      payments (income shock, randomized), days-past-due tracking, non-performing
+      loan (NPL) classification and NPL ratio
+- [ ] Credit risk pricing: risk-based spread per borrower (simple credit score
+      or income/debt ratio at origination) instead of a flat spread
+- [ ] Loan-loss provisioning: provision expense posted against expected/actual
+      defaults (IFRS 9-style expected credit loss, simplified)
+- [ ] Full EU LCR breakdown: HQLA tiering (Level 1 / 2A / 2B, with haircuts) and
+      CRR outflow/inflow categories instead of one aggregate liquidity number
+- [ ] Full NSFR breakdown: ASF (available stable funding) and RSF (required
+      stable funding) factor tables by asset/liability category
+- [ ] Deposit Guarantee Scheme modeling: €100,000 covered-per-depositor cap
+      (Directive 2014/49/EU) as a real constraint, e.g. for a future
+      "bank run" / insolvency stress-test scenario
+- [ ] Interest rate risk / ALM: duration gap analysis between the loan book and
+      deposit book as the central bank policy rate moves over simulated time
