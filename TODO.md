@@ -70,22 +70,24 @@ checklist below is the actionable build order.
       conserves total system balance; trial balance still zero
 
 ## M3 — Clock + agents (headless)
-- [ ] `clock` package: `SimulationClock` (`AtomicReference<ClockSnapshot>`),
+- [x] `clock` package: `SimulationClock` (`AtomicReference<ClockSnapshot>`),
       `ClockTickScheduler` (`@Scheduled(fixedRate=1000)`), publishes
       `ClockTickedEvent` and `DayRolledOverEvent` (one per day crossed)
-- [ ] `stepOneDay()` — same advance logic as continuous run, no sleep, loops until
+- [x] `stepOneDay()` — same advance logic as continuous run, no sleep, loops until
       one day boundary crossed
-- [ ] All domain timestamps from injected simulated clock, never wall-clock `now()`
-- [ ] REST: `GET /api/clock/state`, `POST /api/clock/{play,pause,step-day,reset}`,
+- [x] All domain timestamps from injected simulated clock, never wall-clock `now()`
+      (governs the new clock/agent code; existing ledger/transaction DB-default
+      timestamps are unchanged — no M3 schema changes)
+- [x] REST: `GET /api/clock/state`, `POST /api/clock/{play,pause,step-day,reset}`,
       `POST /api/clock/speed`
-- [ ] `agents` package: `Agent` interface (`onTick(simulatedNow, context)`),
+- [x] `agents` package: `Agent` interface (`onTick(simulatedNow, context)`),
       `AgentScheduler` (listens `ClockTickedEvent`, per-agent exception isolation)
-- [ ] `SalaryAgent`, `BillPayAgent` (publishes `BillPaymentFailedEvent` on
+- [x] `SalaryAgent`, `BillPayAgent` (publishes `BillPaymentFailedEvent` on
       insufficient funds), `RandomSpenderAgent` (seeded `Random` for
       reproducibility)
-- [ ] `DataSeeder` (`ApplicationRunner`): 3–5 demo customers with
+- [x] `DataSeeder` (`ApplicationRunner`): 4 demo customers with
       checking+savings accounts, one of each agent type
-- [ ] Verify: `speed 50` + `play`, wait ~30s, sim date advances and agent
+- [x] Verify: `speed 50` + `play`, wait ~30s, sim date advances and agent
       transactions appear in `GET /api/transactions`; `pause` stops advancement;
       `step-day` from paused advances exactly one day
 
