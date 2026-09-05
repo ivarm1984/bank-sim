@@ -73,6 +73,41 @@ Codegen is configured for the `customer`/`account`/`ledger`/`transaction`
 schemas; add new schemas to the `jooq { … database { schemata { … } } }`
 block in `build.gradle` alongside their first Liquibase changeset.
 
+## Liquibase changelog path must match between the Gradle task and Spring Boot
+The `liquibase` Gradle plugin's `update` task (used for `generateJooq`, see
+above) and Spring Boot's own runtime migration (on `bootRun`/app startup) both
+apply `db.changelog-master.yaml` against the same dev DB, and both record
+applied changesets in `DATABASECHANGELOG` keyed partly on `FILENAME`. Spring
+resolves its changelog via `classpath:db/changelog/...`, so `FILENAME` is
+recorded relative to the classpath root (`src/main/resources`). The Gradle
+activity must resolve to the *same* relative path or the two bookkeeping
+trails diverge silently — each thinks the other's changesets were never run,
+and a non-idempotent changeset (e.g. `CREATE TABLE`, unlike the idempotent
+`CREATE SCHEMA IF NOT EXISTS` M0 shipped with) fails with "already exists" the
+second time it's applied through the other path. Fixed via `searchPath
+'src/main/resources'` + `changelogFile 'db/changelog/db.changelog-master.yaml'`
+in the `liquibase { activities { main { ... } } }` block — never point
+`changelogFile` at a path prefixed with `src/main/resources/`.
+
+## Testing
+- **Real Postgres via Testcontainers, not H2**, for any test that touches the
+  DB — decided in M1 because H2's locking/MVCC semantics diverge from
+  Postgres, which matters for the ledger's pessimistic row locking, and
+  because avoiding a second DB dialect fits the project's no-abstraction-leak
+  stance on data access (see jOOQ rationale above).
+- Base DB-touching tests on `PostgresIntegrationTest`
+  (`backend/src/test/java/.../banksim/PostgresIntegrationTest.java`). It
+  starts **one Postgres container for the whole test run** via a static
+  initializer, deliberately **without** `@Testcontainers`/`@Container` —
+  that JUnit extension stops the container in `afterAll` of whichever test
+  class triggers it, which breaks the container for every other subclass
+  sharing it. This is the Testcontainers "singleton container" pattern; the
+  container is only reaped by Ryuk at JVM exit.
+- Migrations run the normal way (Spring Boot's own Liquibase autoconfig on
+  context startup via `@DynamicPropertySource`-overridden datasource
+  properties) — no separate migration step needed in tests.
+
 ## Local dev prerequisites
-- Docker Desktop must be running before `docker compose up -d` (Postgres) or
-  any Gradle task that touches the dev DB (`update`, `generateJooq`, tests).
+- Docker Desktop must be running before `docker compose up -d` (Postgres),
+  any Gradle task that touches the dev DB (`update`, `generateJooq`, tests —
+  tests need it for Testcontainers, not for the dev DB itself), or `bootRun`.

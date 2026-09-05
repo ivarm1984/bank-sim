@@ -1,0 +1,62 @@
+databaseChangeLog:
+  - changeSet:
+      id: ledger-0004-create-ledger-lines-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: ledger
+            tableName: ledger_lines
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: journal_entry_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    references: ledger.journal_entries(id)
+                    foreignKeyName: fk_ledger_lines_journal_entry
+              - column:
+                  name: ledger_account_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    references: ledger.ledger_accounts(id)
+                    foreignKeyName: fk_ledger_lines_ledger_account
+              - column:
+                  name: entry_type
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: amount
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE ledger.ledger_lines
+              ADD CONSTRAINT chk_ledger_lines_entry_type
+              CHECK (entry_type IN ('DEBIT', 'CREDIT'));
+              ALTER TABLE ledger.ledger_lines
+              ADD CONSTRAINT chk_ledger_lines_amount_positive
+              CHECK (amount > 0);
+        - createIndex:
+            schemaName: ledger
+            tableName: ledger_lines
+            indexName: idx_ledger_lines_journal_entry_id
+            columns:
+              - column:
+                  name: journal_entry_id
+        - createIndex:
+            schemaName: ledger
+            tableName: ledger_lines
+            indexName: idx_ledger_lines_ledger_account_id
+            columns:
+              - column:
+                  name: ledger_account_id

@@ -1,0 +1,47 @@
+databaseChangeLog:
+  - changeSet:
+      id: account-0002-create-accounts-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: account
+            tableName: accounts
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  # Soft reference to customer.customers(id) - no cross-schema
+                  # FK, see AGENTS.md.
+                  name: customer_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: account_type
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: current_balance
+                  type: numeric(19,4)
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - createIndex:
+            schemaName: account
+            tableName: accounts
+            indexName: idx_accounts_customer_id
+            columns:
+              - column:
+                  name: customer_id

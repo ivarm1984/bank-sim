@@ -32,6 +32,10 @@ repositories {
 	mavenCentral()
 }
 
+ext {
+	testcontainersVersion = '1.20.4'
+}
+
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-jooq'
@@ -55,6 +59,11 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-websocket-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+	testImplementation platform("org.testcontainers:testcontainers-bom:${testcontainersVersion}")
+	testImplementation 'org.testcontainers:testcontainers'
+	testImplementation 'org.testcontainers:junit-jupiter'
+	testImplementation 'org.testcontainers:postgresql'
 }
 
 tasks.named('test') {
@@ -64,7 +73,16 @@ tasks.named('test') {
 liquibase {
 	activities {
 		main {
-			changelogFile 'src/main/resources/db/changelog/db.changelog-master.yaml'
+			// searchPath + a changelogFile relative to it (rather than
+			// 'src/main/resources/db/changelog/...') so Liquibase records
+			// the same FILENAME in DATABASECHANGELOG as Spring Boot's own
+			// runtime migration does via 'classpath:db/changelog/...'.
+			// Otherwise this task's bookkeeping and the app's bookkeeping
+			// don't recognize each other's applied changesets, and a
+			// non-idempotent changeset (e.g. CREATE TABLE) fails the second
+			// time it's run through the other path.
+			searchPath 'src/main/resources'
+			changelogFile 'db/changelog/db.changelog-master.yaml'
 			url 'jdbc:postgresql://localhost:5433/banksim'
 			username 'banksim'
 			password 'banksim'

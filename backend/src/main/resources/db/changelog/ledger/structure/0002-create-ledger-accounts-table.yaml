@@ -1,0 +1,49 @@
+databaseChangeLog:
+  - changeSet:
+      id: ledger-0002-create-ledger-accounts-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: ledger
+            tableName: ledger_accounts
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: type
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  # Soft reference to account.accounts(id) - no cross-schema
+                  # FK, see AGENTS.md. Null for singleton ledger accounts
+                  # (BANK_CASH, INTEREST_EXPENSE, FEE_INCOME); set for the
+                  # one CUSTOMER_LIABILITY ledger account per Account.
+                  name: account_id
+                  type: bigint
+                  constraints:
+                    nullable: true
+              - column:
+                  name: name
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            # One singleton ledger account per type (account_id null), and at
+            # most one ledger account per customer Account.
+            sql: >-
+              CREATE UNIQUE INDEX idx_ledger_accounts_singleton_type
+              ON ledger.ledger_accounts (type) WHERE account_id IS NULL;
+              CREATE UNIQUE INDEX idx_ledger_accounts_account_id
+              ON ledger.ledger_accounts (account_id) WHERE account_id IS NOT NULL;

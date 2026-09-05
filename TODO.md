@@ -38,21 +38,22 @@ checklist below is the actionable build order.
       the four schemas
 
 ## M1 — Ledger core
-- [ ] `customer`, `account`, `ledger` packages
-- [ ] Flyway `V1__init_schema.sql`: customers, accounts, ledger_accounts,
-      journal_entries, ledger_lines
-- [ ] Seed chart of accounts: `BANK_CASH`, `INTEREST_EXPENSE`, `FEE_INCOME`
+- [x] `customer`, `account`, `ledger` packages
+- [x] Liquibase changesets: customers, accounts, ledger_accounts,
+      journal_entries, ledger_lines (see `AGENTS.md` — Liquibase, not Flyway)
+- [x] Seed chart of accounts: `BANK_CASH`, `INTEREST_EXPENSE`, `FEE_INCOME`
       (singletons) + one `CUSTOMER_LIABILITY` ledger account per `Account`
-- [ ] `LedgerService.post(JournalEntryRequest)` — enforce
+- [x] `LedgerService.post(JournalEntryRequest)` — enforce
       `SUM(debits) == SUM(credits)`, throw `UnbalancedJournalEntryException`
       otherwise. **Write this test first.**
-- [ ] `Account.currentBalance` cached, updated in the same transaction as the
+- [x] `Account.currentBalance` cached, updated in the same transaction as the
       ledger post; pessimistic locking on `Account` rows during posting
-- [ ] `LedgerReconciliationService` — recompute balance from ledger lines, compare
+- [x] `LedgerReconciliationService` — recompute balance from ledger lines, compare
       to cached balance
-- [ ] Minimal REST: customers, accounts, `GET /api/accounts/{id}/balance`
-- [ ] Verify: `mvn test` passes ledger invariant tests; after posting entries,
-      trial-balance query (`SUM` debits − credits per ledger account) nets to zero
+- [x] Minimal REST: customers, accounts, `GET /api/accounts/{id}/balance`
+- [x] Verify: `./gradlew test` passes ledger invariant tests (Testcontainers
+      Postgres); after posting entries, trial-balance query (`SUM` debits −
+      credits per ledger account) nets to zero
 
 ## M2 — Transactions via REST
 - [ ] `transaction` package: `Transaction` entity,
