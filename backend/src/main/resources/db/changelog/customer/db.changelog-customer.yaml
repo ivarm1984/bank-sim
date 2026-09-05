@@ -1,0 +1,8 @@
+databaseChangeLog:
+  - includeAll:
+      path: structure/
+      relativeToChangelogFile: true
+  - includeAll:
+      path: data/
+      relativeToChangelogFile: true
+      errorIfMissingOrEmpty: false

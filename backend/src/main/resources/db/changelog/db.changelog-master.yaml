@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # One entry per module/schema. Adding a NEW module means adding a line here
+  # (rare - happens once per milestone). Adding a changeset to an EXISTING
+  # module never touches this file - drop the file into that module's
+  # structure/ or data/ folder and its own changelog picks it up.
+  - include:
+      file: customer/db.changelog-customer.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: account/db.changelog-account.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: ledger/db.changelog-ledger.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: transaction/db.changelog-transaction.yaml
+      relativeToChangelogFile: true

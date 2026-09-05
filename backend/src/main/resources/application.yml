@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: banksim
+  datasource:
+    url: jdbc:postgresql://localhost:5433/banksim
+    username: banksim
+    password: banksim
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+management:
+  endpoint:
+    health:
+      enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health

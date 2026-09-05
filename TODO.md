@@ -23,13 +23,19 @@ checklist below is the actionable build order.
 ---
 
 ## M0 — Scaffolding
-- [ ] `backend/`: Maven Spring Boot skeleton (spring-web, spring-data-jpa,
-      postgresql, flyway, spring-websocket, validation)
-- [ ] `frontend/`: Vite + Vue 3 + TypeScript skeleton
-- [ ] Root `docker-compose.yml`: Postgres 16, named volume, `POSTGRES_DB=banksim`
-- [ ] `application.yml`: datasource, Flyway locations, actuator health enabled
-- [ ] Verify: `curl localhost:8080/actuator/health` → UP; `docker compose ps`
-      healthy; `npm run dev` loads with no console errors
+- [x] `backend/`: Gradle (Groovy DSL) Spring Boot skeleton (spring-web, jOOQ,
+      postgresql, liquibase, spring-websocket, validation) — see `AGENTS.md`
+      for why jOOQ over JPA/Hibernate and Liquibase over Flyway
+- [x] `frontend/`: Vite + Vue 3 + TypeScript skeleton
+- [x] Root `docker-compose.yml`: Postgres 16, named volume, `POSTGRES_DB=banksim`
+- [x] `application.yml`: datasource, Liquibase changelog location, actuator
+      health enabled
+- [x] Schema-per-module convention established (one Postgres schema per
+      top-level domain package: `customer`, `account`, `ledger`,
+      `transaction`; no cross-schema FKs) — see `AGENTS.md`
+- [x] Verify: `curl localhost:8080/actuator/health` → UP; `docker compose ps`
+      healthy; `npm run dev` loads with no console errors; `psql \dn` lists
+      the four schemas
 
 ## M1 — Ledger core
 - [ ] `customer`, `account`, `ledger` packages

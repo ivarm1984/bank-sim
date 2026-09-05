@@ -1,0 +1,118 @@
+buildscript {
+	repositories {
+		mavenCentral()
+	}
+	dependencies {
+		// org.liquibase.gradle needs liquibase-core on the buildscript
+		// classpath itself (not just liquibaseRuntime) since it uses
+		// Liquibase's Scope API directly when configuring tasks.
+		classpath 'org.liquibase:liquibase-core:5.0.4'
+	}
+}
+
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '4.1.1'
+	id 'io.spring.dependency-management' version '1.1.7'
+	id 'nu.studer.jooq' version '10.2.1'
+	id 'org.liquibase.gradle' version '3.1.0'
+}
+
+group = 'io.github.ivarm1984'
+version = '0.0.1-SNAPSHOT'
+description = 'Bank simulation learning project'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(25)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'org.springframework.boot:spring-boot-starter-jooq'
+	implementation 'org.springframework.boot:spring-boot-starter-liquibase'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.springframework.boot:spring-boot-starter-websocket'
+	runtimeOnly 'org.postgresql:postgresql'
+
+	jooqGenerator 'org.postgresql:postgresql'
+
+	liquibaseRuntime 'org.liquibase:liquibase-core'
+	liquibaseRuntime 'org.postgresql:postgresql'
+	// liquibase-core's own CLI entrypoint needs picocli, but declares it as
+	// an optional Maven dependency, so Gradle won't pull it in transitively.
+	liquibaseRuntime 'info.picocli:picocli:4.7.7'
+
+	testImplementation 'org.springframework.boot:spring-boot-starter-jooq-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-liquibase-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-websocket-test'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
+
+liquibase {
+	activities {
+		main {
+			changelogFile 'src/main/resources/db/changelog/db.changelog-master.yaml'
+			url 'jdbc:postgresql://localhost:5433/banksim'
+			username 'banksim'
+			password 'banksim'
+		}
+	}
+	runList = 'main'
+}
+
+jooq {
+	configurations {
+		main {
+			generateSchemaSourceOnCompilation = false
+			generationTool {
+				jdbc {
+					driver = 'org.postgresql.Driver'
+					url = 'jdbc:postgresql://localhost:5433/banksim'
+					user = 'banksim'
+					password = 'banksim'
+				}
+				generator {
+					name = 'org.jooq.codegen.DefaultGenerator'
+					database {
+						name = 'org.jooq.meta.postgres.PostgresDatabase'
+						schemata {
+							schema {
+								inputSchema = 'customer'
+							}
+							schema {
+								inputSchema = 'account'
+							}
+							schema {
+								inputSchema = 'ledger'
+							}
+							schema {
+								inputSchema = 'transaction'
+							}
+						}
+					}
+					target {
+						packageName = 'io.github.ivarm1984.banksim.jooq'
+						directory = 'build/generated-src/jooq/main'
+					}
+				}
+			}
+		}
+	}
+}
+
+// jOOQ codegen reads the schemas from a live, migrated dev database, so run
+// Liquibase against it first: `./gradlew update generateJooq`
+generateJooq.dependsOn update
