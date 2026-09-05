@@ -1,0 +1,69 @@
+databaseChangeLog:
+  - changeSet:
+      id: transaction-0002-create-transactions-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: transaction
+            tableName: transactions
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: type
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: from_account_id
+                  type: bigint
+                  constraints:
+                    nullable: true
+              - column:
+                  name: to_account_id
+                  type: bigint
+                  constraints:
+                    nullable: true
+              - column:
+                  name: amount
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: journal_entry_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE transaction.transactions
+              ADD CONSTRAINT chk_transactions_type
+              CHECK (type IN ('DEPOSIT', 'WITHDRAWAL', 'TRANSFER'));
+              ALTER TABLE transaction.transactions
+              ADD CONSTRAINT chk_transactions_amount_positive
+              CHECK (amount > 0);
+        - createIndex:
+            schemaName: transaction
+            tableName: transactions
+            indexName: idx_transactions_from_account_id
+            columns:
+              - column:
+                  name: from_account_id
+        - createIndex:
+            schemaName: transaction
+            tableName: transactions
+            indexName: idx_transactions_to_account_id
+            columns:
+              - column:
+                  name: to_account_id

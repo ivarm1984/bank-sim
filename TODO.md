@@ -56,17 +56,17 @@ checklist below is the actionable build order.
       credits per ledger account) nets to zero
 
 ## M2 — Transactions via REST
-- [ ] `transaction` package: `Transaction` entity,
+- [x] `transaction` package: `Transaction` entity,
       `TransactionService.deposit/withdraw/transfer` (calls `LedgerService`
       synchronously, in one transaction)
   - Deposit → Debit `BANK_CASH`, Credit customer liability
   - Withdrawal → Debit customer liability, Credit `BANK_CASH`
   - Transfer A→B → Debit `CustomerLiability(A)`, Credit `CustomerLiability(B)`
-- [ ] Insufficient-funds handling (400 response)
-- [ ] REST: `POST /api/transactions/{deposit,withdrawal,transfer}`,
+- [x] Insufficient-funds handling (400 response)
+- [x] REST: `POST /api/transactions/{deposit,withdrawal,transfer}`,
       `GET /api/transactions`
-- [ ] Integration test against real Postgres (not just H2)
-- [ ] Verify: deposit/withdraw/transfer via curl; over-withdraw → 400; transfer
+- [x] Integration test against real Postgres (not just H2)
+- [x] Verify: deposit/withdraw/transfer via curl; over-withdraw → 400; transfer
       conserves total system balance; trial balance still zero
 
 ## M3 — Clock + agents (headless)

@@ -39,6 +39,18 @@ public class LedgerAccountService {
         return toLedgerAccount(record);
     }
 
+    /** Looks up the one CUSTOMER_LIABILITY ledger account backing a customer Account. */
+    public LedgerAccount findCustomerLiabilityAccount(long accountId) {
+        var record = dsl.selectFrom(LEDGER_ACCOUNTS)
+                .where(LEDGER_ACCOUNTS.ACCOUNT_ID.eq(accountId))
+                .and(LEDGER_ACCOUNTS.TYPE.eq(LedgerAccountType.CUSTOMER_LIABILITY.name()))
+                .fetchOne();
+        if (record == null) {
+            throw new NoSuchElementException("No customer liability ledger account for account " + accountId);
+        }
+        return toLedgerAccount(record);
+    }
+
     public LedgerAccount findById(long id) {
         var record = dsl.selectFrom(LEDGER_ACCOUNTS)
                 .where(LEDGER_ACCOUNTS.ID.eq(id))

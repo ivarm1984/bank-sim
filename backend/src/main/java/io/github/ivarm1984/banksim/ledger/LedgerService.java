@@ -5,6 +5,8 @@ import static io.github.ivarm1984.banksim.jooq.ledger.tables.LedgerLines.LEDGER_
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 import org.jooq.DSLContext;
@@ -24,6 +26,12 @@ public class LedgerService {
         this.dsl = dsl;
         this.ledgerAccountService = ledgerAccountService;
         this.accountRepository = accountRepository;
+    }
+
+    private record AffectedAccount(long accountId, EntryType entryType, BigDecimal amount) {
+        BigDecimal delta() {
+            return entryType == EntryType.CREDIT ? amount : amount.negate();
+        }
     }
 
     /**
@@ -48,8 +56,6 @@ public class LedgerService {
         // Resolve which ledger accounts back a customer Account, and lock
         // those Account rows in a fixed order before writing anything, so
         // concurrent postings against the same accounts can't deadlock.
-        record AffectedAccount(long accountId, EntryType entryType, BigDecimal amount) {
-        }
         List<AffectedAccount> affected = request.lines().stream()
                 .map(line -> {
                     LedgerAccount ledgerAccount = ledgerAccountService.findById(line.ledgerAccountId());
@@ -61,8 +67,19 @@ public class LedgerService {
                 .filter(java.util.Objects::nonNull)
                 .toList();
 
+        Map<Long, BigDecimal> prospectiveBalances = new TreeMap<>();
         new TreeSet<>(affected.stream().map(AffectedAccount::accountId).toList())
-                .forEach(accountRepository::lockForUpdate);
+                .forEach(id -> prospectiveBalances.put(id, accountRepository.lockForUpdate(id).currentBalance()));
+
+        // A customer liability account can never go negative - validate every
+        // affected account against its cumulative deltas before writing
+        // anything, so a rejected posting leaves no trace.
+        for (AffectedAccount account : affected) {
+            BigDecimal newBalance = prospectiveBalances.merge(account.accountId(), account.delta(), BigDecimal::add);
+            if (newBalance.signum() < 0) {
+                throw new InsufficientFundsException(account.accountId(), newBalance);
+            }
+        }
 
         long journalEntryId = dsl.insertInto(JOURNAL_ENTRIES)
                 .set(JOURNAL_ENTRIES.DESCRIPTION, request.description())
@@ -81,8 +98,7 @@ public class LedgerService {
 
         // Liability accounts increase on CREDIT, decrease on DEBIT.
         for (AffectedAccount account : affected) {
-            BigDecimal delta = account.entryType() == EntryType.CREDIT ? account.amount() : account.amount().negate();
-            accountRepository.adjustBalance(account.accountId(), delta);
+            accountRepository.adjustBalance(account.accountId(), account.delta());
         }
 
         return journalEntryId;
