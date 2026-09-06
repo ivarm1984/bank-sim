@@ -77,6 +77,11 @@ public class LedgerAccountService {
                         record.get(totalCredits)));
     }
 
+    /** True if any journal lines have ever been posted against this ledger account. */
+    public boolean hasAnyLedgerLines(long ledgerAccountId) {
+        return dsl.fetchExists(dsl.selectFrom(LEDGER_LINES).where(LEDGER_LINES.LEDGER_ACCOUNT_ID.eq(ledgerAccountId)));
+    }
+
     public LedgerAccount findById(long id) {
         var record = dsl.selectFrom(LEDGER_ACCOUNTS)
                 .where(LEDGER_ACCOUNTS.ID.eq(id))

@@ -151,19 +151,62 @@ Simple version for now: fixed-rate amortizing loans, no default risk; single
 aggregate ratios rather than full EU breakdowns. Deeper versions of both are in
 the "Complex additions" section below.
 
-- [ ] `treasury` package: new ledger accounts — `CENTRAL_BANK_RESERVES` (asset),
-      `LOAN_RECEIVABLE` per loan (asset), `BANK_CAPITAL` (equity); seed bank
-      capital at startup
+Split into sub-milestones, each intended as its own session (each depends on
+the previous one landing first): M6.1 → M6.2 → M6.3 → M6.4 → M6.5 → M6.6.
+Before starting a sub-milestone's code, surface any non-obvious design choice
+in it with `AskUserQuestion` rather than assuming — see `AGENTS.md` for what's
+already decided vs. still open.
+
+### M6.1 — Treasury ledger foundation ✅ done
+- [x] New singleton ledger accounts in the existing `ledger` schema (not a
+      new `treasury` schema yet — no treasury-owned table exists to justify
+      one; per `AGENTS.md`, a schema lands with the code that first needs
+      it): `CENTRAL_BANK_RESERVES` (asset), `BANK_CAPITAL` (equity), seeded
+      via `ledger/data/0002-seed-treasury-accounts.yaml` (same pattern as
+      the M1 chart-of-accounts seed)
+- [x] New `treasury` package (flat, no schema of its own yet):
+      `TreasuryCapitalSeeder` (`ApplicationRunner`) posts the initial paid-in
+      capital as a real journal entry (Debit `CENTRAL_BANK_RESERVES`, Credit
+      `BANK_CAPITAL`, 1,000,000.00 — an arbitrary round seed value, easy to
+      change later) via `LedgerService.post(...)`, idempotent on
+      `LedgerAccountService.hasAnyLedgerLines(bankCapitalId)`
+- [ ] `LOAN_RECEIVABLE` (one per loan, analogous to `CUSTOMER_LIABILITY`) is
+      *not* created here — deferred to M6.3 where the `loan` schema/table it
+      references actually exists
+- [x] Verify: schema/accounts exist, trial balance still zero after seeding
+      bank capital (the seed posting itself balances) — confirmed live via
+      `GET /api/ledger/accounts` (`CENTRAL_BANK_RESERVES` debit 1,000,000.00,
+      `BANK_CAPITAL` credit 1,000,000.00) and `GET /api/ledger/trial-balance`
+      (`balanced: true`)
+
+### M6.2 — Central bank counterparty
 - [ ] Simulated **central bank counterparty**: policy rate (ECB main
-      refinancing rate analog), deposit facility rate (paid on excess reserves),
-      marginal lending rate (charged when the bank borrows to cover a shortfall)
-      — this is the base rate loan/deposit pricing builds on
-- [ ] `loan` package: `LoanAccount` (principal, term, rate = base + risk spread,
-      amortization schedule)
+      refinancing rate analog), deposit facility rate (paid on excess
+      reserves), marginal lending rate (charged when the bank borrows to
+      cover a shortfall) — this is the base rate loan/deposit pricing builds on
+- [ ] Verify: rate(s) queryable and stable/deterministic given the sim clock;
+      documented how/whether they move over simulated time
+
+### M6.3 — Loan package + origination/repayment
+- [ ] `loan` package + schema: `LoanAccount` (principal, term, rate = base +
+      risk spread, amortization schedule)
+- [ ] Add `LOAN_RECEIVABLE` to `LedgerAccountType` (one per loan, analogous
+      to `CUSTOMER_LIABILITY`/`createCustomerLiabilityAccount`) — needs a
+      design call deferred from M6.1: `ledger_accounts.account_id` is a soft
+      reference specifically to `account.accounts(id)`, so a loan can't
+      safely reuse that column (id collision risk between the two
+      sequences); most likely a new nullable `loan_id` column + partial
+      unique index, mirroring the existing `account_id` one
 - [ ] `LoanService.originate/disburse/repay` — disbursement: Debit
       `LOAN_RECEIVABLE`, Credit customer's checking account; each repayment
       splits principal vs. interest income, one `@Transactional` posting per
       payment
+- [ ] REST: `POST /api/loans`, `GET /api/accounts/{id}/loans`,
+      `GET /api/loans/{id}`
+- [ ] Verify: loan disbursement/repayment keeps trial balance at zero;
+      amortization schedule matches a hand-computed example
+
+### M6.4 — TreasuryService ratios
 - [ ] `TreasuryService` — recomputes simplified ratios from aggregate ledger
       totals (end of day, chained off the existing batch, or on demand):
   - Loan-to-Deposit Ratio (LDR) — internal risk metric, not directly regulated
@@ -176,16 +219,22 @@ the "Complex additions" section below.
     solvency)
   - Capital Adequacy Ratio — simplified CET1 vs. a rough risk-weighted-assets
     estimate; EU minimums 4.5% CET1 / 8% total capital + buffers (CRR)
-- [ ] Feedback loop: if LCR/NSFR/capital ratio breaches its threshold, treasury
-      either throttles new loan origination or auto-borrows reserves from the
-      central bank facility; publishes `TreasuryRatiosUpdatedEvent`
-- [ ] REST: `GET /api/treasury/ratios`, `POST /api/loans`,
-      `GET /api/accounts/{id}/loans`, `GET /api/loans/{id}`
+- [ ] REST: `GET /api/treasury/ratios`
+- [ ] Verify: ratios update after a loan is originated (LDR moves, LCR/NSFR
+      react); values match a hand-computed example off known balances
+
+### M6.5 — Feedback loop
+- [ ] Feedback loop: if LCR/NSFR/capital ratio breaches its threshold,
+      treasury either throttles new loan origination or auto-borrows reserves
+      from the central bank facility; publishes `TreasuryRatiosUpdatedEvent`
+- [ ] Verify: forcing a large loan pushes LCR below 100% and triggers the
+      throttle/borrow path
+
+### M6.6 — BorrowerAgent + end-to-end verify
 - [ ] `BorrowerAgent`: applies for a loan occasionally, then pays on schedule
       via `AgentScheduler` (like `BillPayAgent`, but the debt amortizes)
-- [ ] Verify: loan disbursement/repayment keeps trial balance at zero; ratios
-      update after a loan is originated (LDR moves, LCR/NSFR react); forcing a
-      large loan pushes LCR below 100% and triggers the throttle/borrow path
+- [ ] Verify: full M6 checklist end-to-end — loan lifecycle, ratios, feedback
+      loop all observable together over a multi-day simulated run
 
 ---
 

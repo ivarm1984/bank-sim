@@ -1,0 +1,25 @@
+databaseChangeLog:
+  - changeSet:
+      id: ledger-data-0002-seed-treasury-accounts
+      author: ivarm1984
+      changes:
+        - insert:
+            schemaName: ledger
+            tableName: ledger_accounts
+            columns:
+              - column:
+                  name: type
+                  value: CENTRAL_BANK_RESERVES
+              - column:
+                  name: name
+                  value: Central Bank Reserves
+        - insert:
+            schemaName: ledger
+            tableName: ledger_accounts
+            columns:
+              - column:
+                  name: type
+                  value: BANK_CAPITAL
+              - column:
+                  name: name
+                  value: Bank Capital
