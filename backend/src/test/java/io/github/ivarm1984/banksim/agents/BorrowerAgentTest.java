@@ -1,0 +1,103 @@
+package io.github.ivarm1984.banksim.agents;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Random;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import io.github.ivarm1984.banksim.PostgresIntegrationTest;
+import io.github.ivarm1984.banksim.account.Account;
+import io.github.ivarm1984.banksim.account.AccountService;
+import io.github.ivarm1984.banksim.account.AccountType;
+import io.github.ivarm1984.banksim.customer.CustomerService;
+import io.github.ivarm1984.banksim.event.DomainEventPublisher;
+import io.github.ivarm1984.banksim.loan.LoanAccount;
+import io.github.ivarm1984.banksim.loan.LoanService;
+import io.github.ivarm1984.banksim.loan.LoanStatus;
+import io.github.ivarm1984.banksim.loan.LoanType;
+import io.github.ivarm1984.banksim.transaction.TransactionService;
+
+class BorrowerAgentTest extends PostgresIntegrationTest {
+
+    @Autowired
+    private TransactionService transactionService;
+    @Autowired
+    private AccountService accountService;
+    @Autowired
+    private CustomerService customerService;
+    @Autowired
+    private DomainEventPublisher events;
+    @Autowired
+    private LoanService loanService;
+
+    /** A Random whose every roll succeeds (or fails), regardless of the probability checked against it. */
+    private static Random alwaysRolls(double value) {
+        return new Random() {
+            @Override
+            public double nextDouble() {
+                return value;
+            }
+        };
+    }
+
+    private Account openAccount() {
+        var customer = customerService.create("Test Borrower");
+        return accountService.open(customer.id(), AccountType.CHECKING);
+    }
+
+    @Test
+    void takesAMortgageAndAConsumerLoanOnASuccessfulRollAndNeverTakesASecondMortgage() {
+        Account account = openAccount();
+        AgentContext context = new AgentContext(transactionService, accountService, events, loanService);
+        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0));
+
+        agent.onTick(LocalDateTime.of(2026, 1, 1, 9, 0), context);
+        agent.onTick(LocalDateTime.of(2026, 1, 2, 9, 0), context);
+
+        List<LoanAccount> loans = loanService.findByAccountId(account.id());
+        assertThat(loans).extracting(LoanAccount::loanType).containsExactlyInAnyOrder(LoanType.MORTGAGE, LoanType.CONSUMER);
+        assertThat(loans.stream().filter(l -> l.loanType() == LoanType.MORTGAGE)).hasSize(1);
+    }
+
+    @Test
+    void paysTheDueInstallmentOnTheDueDayReducingOutstandingPrincipal() {
+        Account account = openAccount();
+        AgentContext context = new AgentContext(transactionService, accountService, events, loanService);
+        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0));
+
+        agent.onTick(LocalDateTime.of(2026, 1, 1, 9, 0), context);
+        LoanAccount consumerLoan = loanService.findByAccountId(account.id()).stream()
+                .filter(l -> l.loanType() == LoanType.CONSUMER).findFirst().orElseThrow();
+        BigDecimal principalBefore = consumerLoan.outstandingPrincipal();
+        transactionService.deposit(account.id(), new BigDecimal("10000.00"));
+
+        agent.onTick(LocalDateTime.of(2026, 2, 1, 9, 0), context);
+
+        LoanAccount reloaded = loanService.findById(consumerLoan.id());
+        assertThat(reloaded.outstandingPrincipal()).isLessThan(principalBefore);
+    }
+
+    @Test
+    void insufficientFundsOnTheDueDayIsSkippedSilentlyAndLeavesTheLoanActive() {
+        Account account = openAccount();
+        AgentContext context = new AgentContext(transactionService, accountService, events, loanService);
+        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0));
+
+        agent.onTick(LocalDateTime.of(2026, 1, 1, 9, 0), context);
+        LoanAccount consumerLoan = loanService.findByAccountId(account.id()).stream()
+                .filter(l -> l.loanType() == LoanType.CONSUMER).findFirst().orElseThrow();
+        // Spend the disbursed principal away so the due-day repayment can't be covered.
+        transactionService.withdraw(account.id(), accountService.balanceOf(account.id()));
+
+        agent.onTick(LocalDateTime.of(2026, 2, 1, 9, 0), context);
+
+        LoanAccount reloaded = loanService.findById(consumerLoan.id());
+        assertThat(reloaded.status()).isEqualTo(LoanStatus.ACTIVE);
+        assertThat(reloaded.outstandingPrincipal()).isEqualByComparingTo(consumerLoan.outstandingPrincipal());
+    }
+}

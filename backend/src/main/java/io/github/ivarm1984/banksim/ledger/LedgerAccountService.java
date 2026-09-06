@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 
 import org.jooq.DSLContext;
+import org.jooq.InsertValuesStep3;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -43,6 +44,19 @@ public class LedgerAccountService {
                 .returning()
                 .fetchOne();
         return toLedgerAccount(record);
+    }
+
+    /** Bulk version of {@link #createCustomerLiabilityAccount(long)} - one multi-row INSERT for many accounts. */
+    public void createCustomerLiabilityAccountsBatch(List<Long> accountIds) {
+        if (accountIds.isEmpty()) {
+            return;
+        }
+        InsertValuesStep3<io.github.ivarm1984.banksim.jooq.ledger.tables.records.LedgerAccountsRecord, String, Long, String> insert =
+                dsl.insertInto(LEDGER_ACCOUNTS, LEDGER_ACCOUNTS.TYPE, LEDGER_ACCOUNTS.ACCOUNT_ID, LEDGER_ACCOUNTS.NAME);
+        for (Long accountId : accountIds) {
+            insert = insert.values(LedgerAccountType.CUSTOMER_LIABILITY.name(), accountId, "Customer liability for account " + accountId);
+        }
+        insert.execute();
     }
 
     /** Looks up the one CUSTOMER_LIABILITY ledger account backing a customer Account. */

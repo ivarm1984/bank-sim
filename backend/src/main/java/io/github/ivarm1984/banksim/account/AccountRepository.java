@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 
 import org.jooq.DSLContext;
+import org.jooq.InsertValuesStep2;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -32,6 +33,19 @@ public class AccountRepository {
         return toAccount(record);
     }
 
+    /** Opens many accounts in a single multi-row INSERT - see {@link AccountService#openBatch(List)}. */
+    public List<Account> insertBatch(List<AccountOpenRequest> requests) {
+        if (requests.isEmpty()) {
+            return List.of();
+        }
+        InsertValuesStep2<io.github.ivarm1984.banksim.jooq.account.tables.records.AccountsRecord, Long, String> insert =
+                dsl.insertInto(ACCOUNTS, ACCOUNTS.CUSTOMER_ID, ACCOUNTS.ACCOUNT_TYPE);
+        for (AccountOpenRequest request : requests) {
+            insert = insert.values(request.customerId(), request.accountType().name());
+        }
+        return insert.returning().fetch().map(AccountRepository::toAccount);
+    }
+
     public Account findById(long id) {
         var record = dsl.selectFrom(ACCOUNTS)
                 .where(ACCOUNTS.ID.eq(id))
@@ -45,6 +59,16 @@ public class AccountRepository {
     public List<Account> findAll() {
         return dsl.selectFrom(ACCOUNTS)
                 .orderBy(ACCOUNTS.ID)
+                .fetch()
+                .map(AccountRepository::toAccount);
+    }
+
+    /** Page of accounts, ordered by id - for the dashboard's account list, which can't render an unbounded table at seed-scale. */
+    public List<Account> findPage(int limit, int offset) {
+        return dsl.selectFrom(ACCOUNTS)
+                .orderBy(ACCOUNTS.ID)
+                .limit(limit)
+                .offset(offset)
                 .fetch()
                 .map(AccountRepository::toAccount);
     }

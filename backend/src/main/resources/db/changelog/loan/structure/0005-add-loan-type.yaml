@@ -1,0 +1,19 @@
+databaseChangeLog:
+  - changeSet:
+      id: loan-0005-add-loan-type
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: loan
+            tableName: loans
+            columns:
+              - column:
+                  # MORTGAGE (one per account, low spread) or CONSUMER
+                  # (repeatable, higher spread) - see LoanType. Existing rows
+                  # default to CONSUMER since this codebase has no
+                  # production data to preserve.
+                  name: loan_type
+                  type: varchar(20)
+                  defaultValue: CONSUMER
+                  constraints:
+                    nullable: false

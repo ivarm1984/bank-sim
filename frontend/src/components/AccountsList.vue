@@ -7,11 +7,14 @@ import { formatCurrency } from '../utils/format'
 const accounts = useAccountsStore()
 const customers = useCustomersStore()
 
+// A Map lookup, not .find() per row - customers.list can be in the thousands.
+const customersById = computed(() => new Map(customers.list.map((c) => [c.id, c])))
+
 const rows = computed(() =>
   accounts.list
     .map((account) => ({
       account,
-      customerName: customers.list.find((c) => c.id === account.customerId)?.fullName ?? `Customer ${account.customerId}`,
+      customerName: customersById.value.get(account.customerId)?.fullName ?? `Customer ${account.customerId}`,
     }))
     .sort((a, b) => a.account.id - b.account.id),
 )
@@ -39,5 +42,24 @@ const rows = computed(() =>
         </tr>
       </tbody>
     </table>
+    <div class="mt-2 flex items-center justify-between text-xs text-ink-soft">
+      <span>Page {{ accounts.page + 1 }}</span>
+      <div class="flex gap-3">
+        <button
+          class="disabled:opacity-40"
+          :disabled="accounts.page === 0"
+          @click="accounts.previousPage()"
+        >
+          ← Prev
+        </button>
+        <button
+          class="disabled:opacity-40"
+          :disabled="!accounts.hasNextPage"
+          @click="accounts.nextPage()"
+        >
+          Next →
+        </button>
+      </div>
+    </div>
   </section>
 </template>

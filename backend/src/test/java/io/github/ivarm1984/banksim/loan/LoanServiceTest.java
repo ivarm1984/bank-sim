@@ -54,7 +54,7 @@ class LoanServiceTest extends PostgresIntegrationTest {
     /** Resets the clock to its deterministic epoch date, so the central bank policy rate (and thus loan pricing) is fixed. */
     private BigDecimal annualRateAtEpoch() {
         clockService.reset();
-        return centralBankService.currentRates().policyRate().add(LoanService.RISK_SPREAD);
+        return centralBankService.currentRates().policyRate().add(LoanService.CONSUMER_RISK_SPREAD);
     }
 
     private static BigDecimal monthlyRateOf(BigDecimal annualRate) {
@@ -76,7 +76,7 @@ class LoanServiceTest extends PostgresIntegrationTest {
         Account account = openAccount();
         BigDecimal principal = new BigDecimal("12000.00");
 
-        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), principal, 12);
+        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, principal, 12);
 
         assertThat(loan.annualRate()).isEqualByComparingTo(annualRate);
         assertThat(loan.installmentAmount()).isEqualByComparingTo(expectedInstallmentAmount(principal, annualRate, 12));
@@ -109,12 +109,38 @@ class LoanServiceTest extends PostgresIntegrationTest {
     }
 
     @Test
+    void mortgagePricesLowerThanConsumerForTheSamePrincipalAndTerm() {
+        clockService.reset();
+        Account account = openAccount();
+
+        LoanAccount mortgage = loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.MORTGAGE, new BigDecimal("100000.00"), 240);
+        LoanAccount consumer = loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 24);
+
+        assertThat(mortgage.annualRate()).isLessThan(consumer.annualRate());
+        assertThat(mortgage.annualRate())
+                .isEqualByComparingTo(centralBankService.currentRates().policyRate().add(LoanService.MORTGAGE_RISK_SPREAD));
+    }
+
+    @Test
+    void secondMortgageOnTheSameAccountIsRejected() {
+        clockService.reset();
+        Account account = openAccount();
+        loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.MORTGAGE, new BigDecimal("100000.00"), 240);
+
+        assertThatThrownBy(() -> loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.MORTGAGE, new BigDecimal("50000.00"), 180))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
     void disbursementPostsABalancedJournalEntryAndKeepsTrialBalanceZero() {
         annualRateAtEpoch();
         Account account = openAccount();
         BigDecimal balanceBefore = accountService.balanceOf(account.id());
 
-        loanService.originateAndDisburse(account.customerId(), account.id(), new BigDecimal("5000.00"), 6);
+        loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 6);
 
         assertThat(accountService.balanceOf(account.id())).isEqualByComparingTo(balanceBefore.add(new BigDecimal("5000.00")));
         assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
@@ -124,7 +150,7 @@ class LoanServiceTest extends PostgresIntegrationTest {
     void normalRepaymentSplitsPrincipalAndInterestAndAdvancesInstallmentNumber() {
         annualRateAtEpoch();
         Account account = openAccount();
-        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), new BigDecimal("12000.00"), 12);
+        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("12000.00"), 12);
         BigDecimal expectedInterest = loan.principal().multiply(monthlyRateOf(loan.annualRate())).setScale(2, RoundingMode.HALF_UP);
 
         LoanPayment payment = loanService.repay(loan.id(), loan.installmentAmount());
@@ -144,7 +170,7 @@ class LoanServiceTest extends PostgresIntegrationTest {
     void partialEarlyPayoffThenFullPayoffClosesTheLoanBeforeFullTerm() {
         annualRateAtEpoch();
         Account account = openAccount();
-        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), new BigDecimal("12000.00"), 12);
+        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("12000.00"), 12);
         topUpForRepayment(account.id());
         LoanInstallment plannedFirst = loanService.findDetailById(loan.id()).installments().get(0);
 
@@ -177,7 +203,7 @@ class LoanServiceTest extends PostgresIntegrationTest {
     void fullEarlyPayoffClosesTheLoanAndFurtherRepaymentIsRejected() {
         annualRateAtEpoch();
         Account account = openAccount();
-        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), new BigDecimal("12000.00"), 12);
+        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("12000.00"), 12);
         topUpForRepayment(account.id());
         BigDecimal interestDue = loan.principal().multiply(monthlyRateOf(loan.annualRate())).setScale(2, RoundingMode.HALF_UP);
         BigDecimal payoffAmount = loan.principal().add(interestDue);
@@ -201,7 +227,7 @@ class LoanServiceTest extends PostgresIntegrationTest {
     void trialBalanceStaysZeroAcrossAFullOriginationDisbursementRepaymentsAndPayoffSequence() {
         annualRateAtEpoch();
         Account account = openAccount();
-        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), new BigDecimal("6000.00"), 6);
+        LoanAccount loan = loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("6000.00"), 6);
         topUpForRepayment(account.id());
         assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
 

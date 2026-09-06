@@ -25,7 +25,7 @@ public class LoanController {
     @PostMapping("/api/loans")
     public ResponseEntity<LoanAccount> originate(@Valid @RequestBody OriginateLoanRequest request) {
         LoanAccount created = loanService.originateAndDisburse(
-                request.customerId(), request.disbursementAccountId(), request.principal(), request.termMonths());
+                request.customerId(), request.disbursementAccountId(), request.loanType(), request.principal(), request.termMonths());
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
@@ -40,8 +40,8 @@ public class LoanController {
     }
 
     public record OriginateLoanRequest(
-            @NotNull Long customerId, @NotNull Long disbursementAccountId, @NotNull @Positive BigDecimal principal,
-            @NotNull @Positive Integer termMonths) {
+            @NotNull Long customerId, @NotNull Long disbursementAccountId, @NotNull LoanType loanType,
+            @NotNull @Positive BigDecimal principal, @NotNull @Positive Integer termMonths) {
     }
 
     public record RepayLoanRequest(@NotNull @Positive BigDecimal amount) {

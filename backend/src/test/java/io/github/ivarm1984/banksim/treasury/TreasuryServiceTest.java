@@ -22,6 +22,7 @@ import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
 import io.github.ivarm1984.banksim.ledger.LedgerReconciliationService;
 import io.github.ivarm1984.banksim.loan.LoanService;
+import io.github.ivarm1984.banksim.loan.LoanType;
 import io.github.ivarm1984.banksim.transaction.TransactionService;
 
 class TreasuryServiceTest extends PostgresIntegrationTest {
@@ -67,7 +68,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
     void persistedRatiosMatchTheSnapshotsOwnRawBalances() {
         Account account = openAccount();
         transactionService.deposit(account.id(), new BigDecimal("5000.00"));
-        loanService.originateAndDisburse(account.customerId(), account.id(), new BigDecimal("1000.00"), 12);
+        loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("1000.00"), 12);
 
         TreasuryRatioSnapshot snapshot = treasuryService.computeAndPersist(LocalDate.of(2030, 1, 1));
 
@@ -99,7 +100,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         Account account = openAccount();
         transactionService.deposit(account.id(), new BigDecimal("500.00"));
         BigDecimal principal = new BigDecimal("10000.00");
-        loanService.originateAndDisburse(account.customerId(), account.id(), principal, 12);
+        loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, principal, 12);
 
         TreasuryRatioSnapshot after = treasuryService.computeAndPersist(LocalDate.of(2030, 2, 2));
 
@@ -176,7 +177,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
 
             assertThat(treasuryService.isLoanOriginationThrottled()).isTrue();
             Account account = openAccount();
-            assertThatThrownBy(() -> loanService.originateAndDisburse(account.customerId(), account.id(), new BigDecimal("1000.00"), 6))
+            assertThatThrownBy(() -> loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("1000.00"), 6))
                     .isInstanceOf(IllegalStateException.class);
         } finally {
             treasuryRatioRepository.insert(

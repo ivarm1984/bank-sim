@@ -417,15 +417,102 @@ already decided vs. still open.
       throttle test restores a healthy snapshot in a `finally` so it doesn't
       leave later test classes permanently throttled.
 
-### M6.6 — BorrowerAgent + end-to-end verify
-- [ ] `BorrowerAgent`: applies for a loan occasionally, then pays on schedule
+### M6.6 — BorrowerAgent + end-to-end verify ✅ done
+- [x] `BorrowerAgent`: applies for a loan occasionally, then pays on schedule
       via `AgentScheduler` (like `BillPayAgent`, but the debt amortizes)
-- [ ] Verify: full M6 checklist end-to-end — loan lifecycle, ratios, feedback
+  - Expanded beyond the original one-line scope per a mid-build steer: two
+    real loan products instead of one generic loan, and demo seeding at
+    ~10,000 customers instead of 4 - see `AskUserQuestion`-driven design
+    calls below and the approved plan this milestone was built from.
+  - New `LoanType` enum (`MORTGAGE`, `CONSUMER`) on `loans` - a new
+    `loan_type` column (`loan-0005-add-loan-type.yaml`), replacing the
+    single flat `LoanService.RISK_SPREAD` with `MORTGAGE_RISK_SPREAD`
+    (150bps) and `CONSUMER_RISK_SPREAD` (900bps): mortgages price low/long,
+    consumer loans price high/short, same "illustrative constant" spirit as
+    the spread they replace. `originate()` rejects a second `MORTGAGE` on
+    the same account (any status, not just active) - "we can simplify to 1
+    mortgage" was explicit. Consumer loans are unrestricted in count; the
+    agent (not `LoanService`) is what keeps a borrower to one *active*
+    consumer loan at a time.
+  - `AgentContext` gained a `loanService` field (and `AgentScheduler`'s
+    constructor a matching parameter) so agents can originate/repay loans -
+    the M6.3-M6.5 loan work had no agent-facing path before this.
+  - `BorrowerAgent` tracks two independent slots: a mortgage (daily
+    low-probability roll, taken at most once ever) and a consumer loan
+    (daily higher-probability roll, only while it doesn't already have one
+    active; the slot frees up once `LoanPayment.outstandingPrincipalAfter()`
+    hits zero, allowing another). Missed installments (insufficient funds)
+    are skipped silently, same as `RandomSpenderAgent`'s spend-skip -
+    delinquency/NPL tracking stays deferred in "Complex additions" below.
+    Always paired with a `SalaryAgent` on the same account in `DataSeeder` -
+    a borrower needs income to service its debt, flagged back in M6.3.
+  - `DataSeeder` now seeds `SEED_CUSTOMER_COUNT = 10_000` customers (the
+    original 4 named ones kept for continuity, the rest generated) via new
+    batch-insert paths - `CustomerService.createBatch`,
+    `AccountService.openBatch`, `LedgerAccountService
+    .createCustomerLiabilityAccountsBatch` - chunked multi-row
+    `INSERT ... RETURNING` (1,000 rows/statement) instead of one round trip
+    per row, since no batch-insert capability existed anywhere in the
+    codebase before this and 10k customers × 2 accounts × a ledger account
+    each would otherwise be ~50,000 sequential round trips at startup.
+    Confirmed live: 10,000 customers + 20,000 accounts seed in ~3 seconds.
+  - Dashboard changes for event volume at this scale: `EventFeedPublisher`
+    now also bridges `LoanOriginatedEvent`/`LoanRepaidEvent` onto
+    `/topic/events`; the frontend `eventFeed` store filters the *visible*
+    feed to "big enough" events (large transactions, bill-payment failures,
+    batch/day-rollover events, loan originations, and only a payoff-closing
+    `LOAN_REPAID`) while still tallying every event into rolling counters
+    (`EventStats.vue`: total transactions/volume, loans originated, loan
+    payments, and payments in the last real-time minute) - filtering
+    happens client-side only, `EventFeedPublisher` keeps broadcasting
+    everything unfiltered. `DashboardView.vue` no longer triggers a full
+    `accounts.load()` on every `TRANSACTION_COMPLETED` (was a full unbounded
+    `GET /api/accounts` per transaction - fine at 4 customers, a runaway
+    hammering loop at 10k); the periodic 10s resync covers it instead.
+    `GET /api/accounts` is now paginated by default (`limit`/`offset`,
+    `all=true` for the old unbounded behavior) and `AccountsList.vue` got
+    Prev/Next paging plus a `Map`-based customer-name lookup instead of a
+    per-row linear scan.
+  - **Found during verification, deliberately not fixed here** (see the new
+    "Later phases" item below): the M4 EOD batch
+    (`InterestAccrualService`/`StatementGenerationService`) does one
+    `@Transactional` accrual/statement *per account, per simulated day*.
+    That's invisible at 4 demo accounts but at 20,000 accounts it made one
+    simulated day take ~3-4 minutes of real time with the clock running -
+    the 10k-customer seed itself is fine, but actually *playing* the
+    simulation forward at this scale is currently impractical.
+- [x] Verify: full M6 checklist end-to-end — loan lifecycle, ratios, feedback
       loop all observable together over a multi-day simulated run
+  - `./gradlew test` (Testcontainers Postgres): new `BorrowerAgentTest`
+    (direct `onTick` calls, same pattern as `SalaryAgentTest`) covers
+    taking a mortgage + consumer loan on a successful roll and never a
+    second mortgage, paying the due installment down, and silently skipping
+    an unpayable installment without throwing; `LoanServiceTest` gained
+    mortgage-vs-consumer pricing and second-mortgage-rejection cases.
+  - Live: reset the dev DB, booted the app, confirmed 10,000 customers /
+    20,000 accounts seeded, `GET /api/accounts` paginated at 100/page, and
+    `GET /api/treasury/loan-origination-status` reachable. Playing the
+    clock forward to actually observe `BorrowerAgent` take/repay loans
+    end-to-end live was blocked by the EOD-batch performance issue above
+    (one simulated day advancing every few minutes) - the loan
+    lifecycle/ratio/feedback-loop interaction itself is exercised by the
+    existing `LoanServiceTest`/`TreasuryServiceTest`/`BorrowerAgentTest`
+    suites, just not watched live end-to-end at 10k-customer scale.
 
 ---
 
 ## Later phases (not started yet)
+- [ ] Batch the EOD interest-accrual/statement-generation jobs. Found during
+      M6.6's 10,000-customer seeding: `InterestAccrualService` and
+      `StatementGenerationService` each do one `@Transactional`
+      accrual/statement per account per simulated day - fine at a handful of
+      demo accounts, but at 20,000 accounts one simulated day takes ~3-4
+      minutes of real time with the clock running, making the simulation
+      impractical to actually play forward at that scale (seeding itself is
+      fine - this is specifically the daily batch). Needs a batched
+      accrual/statement path (e.g. one multi-row `UPDATE`/`INSERT` per day
+      instead of one transaction per account) analogous to the batch-insert
+      seeding work M6.6 added for `CustomerService`/`AccountService`.
 - [ ] Extract `interest`/`statement` (or others) into real separate services
 - [ ] Swap `DomainEventPublisher` for a Kafka/RabbitMQ/NATS producer
 - [ ] Observability: Micrometer + Prometheus + Grafana

@@ -8,6 +8,7 @@ public record LoanAccount(
         Long id,
         Long customerId,
         Long disbursementAccountId,
+        LoanType loanType,
         BigDecimal principal,
         BigDecimal annualRate,
         int termMonths,

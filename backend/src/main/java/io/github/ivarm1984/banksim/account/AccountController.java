@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -31,9 +32,13 @@ public class AccountController {
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
+    /** Paginated by default (dashboard-scale seeding can be tens of thousands of accounts). Pass {@code all=true} for the unbounded list. */
     @GetMapping
-    public List<Account> findAll() {
-        return accountService.findAll();
+    public List<Account> findAll(
+            @RequestParam(defaultValue = "false") boolean all,
+            @RequestParam(defaultValue = "100") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+        return all ? accountService.findAll() : accountService.findPage(limit, offset);
     }
 
     @GetMapping("/{id}")

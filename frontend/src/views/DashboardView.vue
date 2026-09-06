@@ -3,6 +3,7 @@ import { onMounted, onUnmounted } from 'vue'
 import SimulationControls from '../components/SimulationControls.vue'
 import AccountsList from '../components/AccountsList.vue'
 import EventFeed from '../components/EventFeed.vue'
+import EventStats from '../components/EventStats.vue'
 import LedgerInspector from '../components/LedgerInspector.vue'
 import TransactionLog from '../components/TransactionLog.vue'
 import StatementViewer from '../components/StatementViewer.vue'
@@ -28,7 +29,9 @@ onMounted(() => {
   subscribe<ClockSnapshot>('/topic/clock', clock.patch)
   subscribe<EventFeedMessage>('/topic/events', (message) => {
     eventFeed.push(message)
-    if (message.type === 'TRANSACTION_COMPLETED' || message.type === 'INTEREST_ACCRUAL_BATCH_COMPLETED') {
+    // Not on TRANSACTION_COMPLETED - at seed scale that fires far too often for a full refetch;
+    // the periodic resync below keeps the current page fresh instead.
+    if (message.type === 'INTEREST_ACCRUAL_BATCH_COMPLETED') {
       accounts.load()
     }
   })
@@ -46,6 +49,10 @@ onUnmounted(() => clearInterval(resyncHandle))
     <main class="mx-auto grid max-w-6xl gap-x-10 gap-y-10 px-6 py-8 md:grid-cols-2">
       <AccountsList />
       <EventFeed />
+
+      <div class="md:col-span-2">
+        <EventStats />
+      </div>
 
       <div class="md:col-span-2">
         <LedgerInspector />

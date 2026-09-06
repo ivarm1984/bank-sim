@@ -11,6 +11,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import io.github.ivarm1984.banksim.agents.BillPaymentFailedEvent;
 import io.github.ivarm1984.banksim.clock.DayRolledOverEvent;
 import io.github.ivarm1984.banksim.interest.InterestAccrualBatchCompletedEvent;
+import io.github.ivarm1984.banksim.loan.LoanOriginatedEvent;
+import io.github.ivarm1984.banksim.loan.LoanRepaidEvent;
 import io.github.ivarm1984.banksim.transaction.TransactionCompletedEvent;
 
 /**
@@ -52,6 +54,18 @@ public class EventFeedPublisher {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onDayRolledOver(DayRolledOverEvent event) {
         send("DAY_ROLLED_OVER", event);
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onLoanOriginated(LoanOriginatedEvent event) {
+        send("LOAN_ORIGINATED", event);
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onLoanRepaid(LoanRepaidEvent event) {
+        send("LOAN_REPAID", event);
     }
 
     private void send(String type, Object payload) {

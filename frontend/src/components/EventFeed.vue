@@ -24,6 +24,16 @@ interface InterestBatchPayload {
 interface DayRolledOverPayload {
   newDate: string
 }
+interface LoanOriginatedPayload {
+  loanId: number
+  loanType: 'MORTGAGE' | 'CONSUMER'
+  principal: number
+}
+interface LoanRepaidPayload {
+  loanId: number
+  amount: number
+  paidOff: boolean
+}
 
 function describe(type: string, payload: unknown): { text: string; tone: 'credit' | 'debit' | 'neutral' } {
   switch (type) {
@@ -44,6 +54,15 @@ function describe(type: string, payload: unknown): { text: string; tone: 'credit
     case 'DAY_ROLLED_OVER': {
       const p = payload as DayRolledOverPayload
       return { text: `Simulated day rolled over to ${p.newDate}`, tone: 'neutral' }
+    }
+    case 'LOAN_ORIGINATED': {
+      const p = payload as LoanOriginatedPayload
+      const label = p.loanType === 'MORTGAGE' ? 'Mortgage' : 'Consumer loan'
+      return { text: `${label} of ${formatCurrency(p.principal)} originated (loan ${p.loanId})`, tone: 'debit' }
+    }
+    case 'LOAN_REPAID': {
+      const p = payload as LoanRepaidPayload
+      return { text: `Loan ${p.loanId} paid off with a final payment of ${formatCurrency(p.amount)}`, tone: 'credit' }
     }
     default:
       return { text: type, tone: 'neutral' }

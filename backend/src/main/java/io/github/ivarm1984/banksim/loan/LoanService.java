@@ -44,11 +44,13 @@ import io.github.ivarm1984.banksim.treasury.TreasuryService;
 public class LoanService {
 
     /**
-     * Flat spread added to the central bank policy rate for every loan.
-     * Real per-borrower credit risk pricing is deferred - see TODO.md's
-     * "Complex additions" section ("Credit risk pricing").
+     * Flat spreads added to the central bank policy rate, one per
+     * {@link LoanType} - mortgages price low/long, consumer loans price
+     * high/short. Real per-borrower credit risk pricing is deferred - see
+     * TODO.md's "Complex additions" section ("Credit risk pricing").
      */
-    static final BigDecimal RISK_SPREAD = new BigDecimal("0.0400");
+    static final BigDecimal MORTGAGE_RISK_SPREAD = new BigDecimal("0.0150");
+    static final BigDecimal CONSUMER_RISK_SPREAD = new BigDecimal("0.0900");
 
     private static final BigDecimal MONTHS_PER_YEAR = new BigDecimal("12");
 
@@ -79,7 +81,7 @@ public class LoanService {
      * {@link #disburse(long)}.
      */
     @Transactional
-    public LoanAccount originate(long customerId, long disbursementAccountId, BigDecimal principal, int termMonths) {
+    public LoanAccount originate(long customerId, long disbursementAccountId, LoanType loanType, BigDecimal principal, int termMonths) {
         if (principal == null || principal.signum() <= 0) {
             throw new IllegalArgumentException("Principal must be positive");
         }
@@ -90,17 +92,26 @@ public class LoanService {
             throw new IllegalStateException(
                     "Loan origination is currently throttled: treasury's capital/funding ratio is below its regulatory minimum");
         }
+        if (loanType == LoanType.MORTGAGE && hasMortgage(disbursementAccountId)) {
+            throw new IllegalStateException("Account " + disbursementAccountId + " already has a mortgage - only one is allowed");
+        }
 
-        BigDecimal annualRate = centralBankService.currentRates().policyRate().add(RISK_SPREAD);
+        BigDecimal riskSpread = loanType == LoanType.MORTGAGE ? MORTGAGE_RISK_SPREAD : CONSUMER_RISK_SPREAD;
+        BigDecimal annualRate = centralBankService.currentRates().policyRate().add(riskSpread);
         BigDecimal monthlyRate = annualRate.divide(MONTHS_PER_YEAR, MathContext.DECIMAL64);
         BigDecimal installmentAmount = installmentAmount(principal, monthlyRate, termMonths);
         LocalDate originationDate = clockService.state().simulatedTime().toLocalDate();
 
         LoanAccount loan = loanRepository.insertLoan(
-                customerId, disbursementAccountId, principal, annualRate, termMonths, installmentAmount, originationDate);
+                customerId, disbursementAccountId, loanType, principal, annualRate, termMonths, installmentAmount, originationDate);
 
         generateSchedule(loan.id(), principal, monthlyRate, installmentAmount, termMonths, originationDate);
         return loan;
+    }
+
+    private boolean hasMortgage(long disbursementAccountId) {
+        return loanRepository.findByDisbursementAccountId(disbursementAccountId).stream()
+                .anyMatch(loan -> loan.loanType() == LoanType.MORTGAGE);
     }
 
     /** Posts the disbursement: Debit LOAN_RECEIVABLE, Credit the disbursement account's CUSTOMER_LIABILITY. */
@@ -117,14 +128,16 @@ public class LoanService {
                         new LedgerLineRequest(liabilityId, EntryType.CREDIT, loan.principal()))));
 
         events.publish(new LoanOriginatedEvent(
-                loan.id(), loan.customerId(), loan.disbursementAccountId(), loan.principal(), loan.annualRate(), loan.termMonths()));
+                loan.id(), loan.customerId(), loan.disbursementAccountId(), loan.loanType(), loan.principal(),
+                loan.annualRate(), loan.termMonths()));
         return loan;
     }
 
     /** Originates and immediately disburses - what {@code POST /api/loans} calls. */
     @Transactional
-    public LoanAccount originateAndDisburse(long customerId, long disbursementAccountId, BigDecimal principal, int termMonths) {
-        LoanAccount loan = originate(customerId, disbursementAccountId, principal, termMonths);
+    public LoanAccount originateAndDisburse(
+            long customerId, long disbursementAccountId, LoanType loanType, BigDecimal principal, int termMonths) {
+        LoanAccount loan = originate(customerId, disbursementAccountId, loanType, principal, termMonths);
         return disburse(loan.id());
     }
 

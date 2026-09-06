@@ -22,11 +22,12 @@ public class LoanRepository {
     }
 
     public LoanAccount insertLoan(
-            long customerId, long disbursementAccountId, BigDecimal principal, BigDecimal annualRate,
+            long customerId, long disbursementAccountId, LoanType loanType, BigDecimal principal, BigDecimal annualRate,
             int termMonths, BigDecimal installmentAmount, LocalDate originationDate) {
         var record = dsl.insertInto(LOANS)
                 .set(LOANS.CUSTOMER_ID, customerId)
                 .set(LOANS.DISBURSEMENT_ACCOUNT_ID, disbursementAccountId)
+                .set(LOANS.LOAN_TYPE, loanType.name())
                 .set(LOANS.PRINCIPAL, principal)
                 .set(LOANS.ANNUAL_RATE, annualRate)
                 .set(LOANS.TERM_MONTHS, termMonths)
@@ -132,6 +133,7 @@ public class LoanRepository {
                 record.getId(),
                 record.getCustomerId(),
                 record.getDisbursementAccountId(),
+                LoanType.valueOf(record.getLoanType()),
                 record.getPrincipal(),
                 record.getAnnualRate(),
                 record.getTermMonths(),
