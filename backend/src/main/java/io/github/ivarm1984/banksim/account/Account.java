@@ -6,7 +6,7 @@ import java.time.OffsetDateTime;
 public record Account(
         Long id,
         Long customerId,
-        String accountType,
+        AccountType accountType,
         BigDecimal currentBalance,
         OffsetDateTime createdAt) {
 }

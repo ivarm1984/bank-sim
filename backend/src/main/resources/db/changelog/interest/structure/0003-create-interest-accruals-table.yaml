@@ -1,0 +1,63 @@
+databaseChangeLog:
+  - changeSet:
+      id: interest-0003-create-interest-accruals-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: interest
+            tableName: interest_accruals
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  # Soft reference to account.accounts(id) - no cross-schema
+                  # FK, see AGENTS.md.
+                  name: account_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: accrual_date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  name: principal_balance
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: annual_rate
+                  type: numeric(6,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: amount
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Null when amount is zero (e.g. a 0%-rate CHECKING
+                  # account) - no ledger entry is posted for a zero amount,
+                  # but the accrual row is still written for audit history.
+                  # Soft reference to ledger.journal_entries(id) - no
+                  # cross-schema FK, see AGENTS.md.
+                  name: journal_entry_id
+                  type: bigint
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              CREATE UNIQUE INDEX idx_interest_accruals_account_id_date
+              ON interest.interest_accruals (account_id, accrual_date);

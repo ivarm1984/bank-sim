@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.Map;
 
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -47,6 +46,6 @@ public class AccountController {
         return Map.of("balance", accountService.balanceOf(id));
     }
 
-    public record OpenAccountRequest(@NotNull Long customerId, @NotBlank String accountType) {
+    public record OpenAccountRequest(@NotNull Long customerId, @NotNull AccountType accountType) {
     }
 }

@@ -92,17 +92,21 @@ checklist below is the actionable build order.
       `step-day` from paused advances exactly one day
 
 ## M4 — End-of-day batch
-- [ ] `interest` package: `InterestAccrualService`/`Listener` on
+- [x] `interest` package: `InterestAccrualService`/`Listener` on
       `DayRolledOverEvent`, per-account `@Transactional` accrual (not one giant
       transaction), posts ledger entry (Debit `INTEREST_EXPENSE`, Credit customer
       liability), writes `InterestAccrual` (unique per account+date), publishes
       `InterestAccrualBatchCompletedEvent`
-- [ ] `statement` package: `StatementGenerationService`/`Listener` on
+  - Added a proper `AccountType` enum (`CHECKING`/`SAVINGS`/`TERM_DEPOSIT`,
+    replacing the free-text `accountType` field) and an `interest.rate_policies`
+    table keyed by account type, seeded with illustrative flat rates - M6
+    (treasury) replaces these with central-bank-rate-derived pricing
+- [x] `statement` package: `StatementGenerationService`/`Listener` on
       `InterestAccrualBatchCompletedEvent` (chained, not parallel listener),
       generates one `Statement` per account per day (unique per account+date)
-- [ ] REST: `GET /api/accounts/{id}/interest-accruals`,
+- [x] REST: `GET /api/accounts/{id}/interest-accruals`,
       `GET /api/accounts/{id}/statements`
-- [ ] Verify: computed interest matches a known balance/rate by hand; statement's
+- [x] Verify: computed interest matches a known balance/rate by hand; statement's
       opening balance on day N+1 equals closing balance on day N; trial balance
       still zero
 

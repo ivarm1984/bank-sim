@@ -1,0 +1,10 @@
+databaseChangeLog:
+  - changeSet:
+      id: account-0003-add-account-type-check-constraint
+      author: ivarm1984
+      changes:
+        - sql:
+            sql: >-
+              ALTER TABLE account.accounts
+              ADD CONSTRAINT chk_accounts_account_type
+              CHECK (account_type IN ('CHECKING', 'SAVINGS', 'TERM_DEPOSIT'));

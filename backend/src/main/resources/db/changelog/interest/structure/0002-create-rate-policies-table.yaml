@@ -1,0 +1,30 @@
+databaseChangeLog:
+  - changeSet:
+      id: interest-0002-create-rate-policies-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: interest
+            tableName: rate_policies
+            columns:
+              - column:
+                  # Soft reference to the account.AccountType enum - no
+                  # cross-schema FK, see AGENTS.md.
+                  name: account_type
+                  type: text
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: annual_rate
+                  type: numeric(6,4)
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE interest.rate_policies
+              ADD CONSTRAINT chk_rate_policies_account_type
+              CHECK (account_type IN ('CHECKING', 'SAVINGS', 'TERM_DEPOSIT'));
+              ALTER TABLE interest.rate_policies
+              ADD CONSTRAINT chk_rate_policies_annual_rate_non_negative
+              CHECK (annual_rate >= 0);

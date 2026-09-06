@@ -1,0 +1,37 @@
+databaseChangeLog:
+  - changeSet:
+      id: interest-data-0001-seed-rate-policies
+      author: ivarm1984
+      # Illustrative flat rates for now - M6 (treasury) replaces these with
+      # rates derived from the simulated central bank policy rate + spread.
+      changes:
+        - insert:
+            schemaName: interest
+            tableName: rate_policies
+            columns:
+              - column:
+                  name: account_type
+                  value: CHECKING
+              - column:
+                  name: annual_rate
+                  valueNumeric: 0.0000
+        - insert:
+            schemaName: interest
+            tableName: rate_policies
+            columns:
+              - column:
+                  name: account_type
+                  value: SAVINGS
+              - column:
+                  name: annual_rate
+                  valueNumeric: 0.0150
+        - insert:
+            schemaName: interest
+            tableName: rate_policies
+            columns:
+              - column:
+                  name: account_type
+                  value: TERM_DEPOSIT
+              - column:
+                  name: annual_rate
+                  valueNumeric: 0.0300

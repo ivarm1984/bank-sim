@@ -1,0 +1,7 @@
+databaseChangeLog:
+  - changeSet:
+      id: interest-0001-create-schema
+      author: ivarm1984
+      changes:
+        - sql:
+            sql: CREATE SCHEMA IF NOT EXISTS interest

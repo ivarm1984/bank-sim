@@ -21,7 +21,7 @@ public class AccountService {
 
     /** Opens a new Account and its backing CUSTOMER_LIABILITY ledger account. */
     @Transactional
-    public Account open(long customerId, String accountType) {
+    public Account open(long customerId, AccountType accountType) {
         Account account = accountRepository.insert(customerId, accountType);
         ledgerAccountService.createCustomerLiabilityAccount(account.id());
         return account;

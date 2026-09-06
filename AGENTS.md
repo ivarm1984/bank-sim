@@ -18,10 +18,10 @@ build roadmap/milestones; this file is about *how* to build, not *what*.
 
 ## Schema-per-module (Postgres)
 One Postgres **schema** per top-level domain package, 1:1, no exceptions.
-Current schemas: `customer`, `account`, `ledger`, `transaction`. Later
-milestones (`interest`/`statement` in M4, `treasury`/`loan` in M6) each add
-their own schema the same way when they land — not created speculatively
-ahead of the code that needs them.
+Current schemas: `customer`, `account`, `ledger`, `transaction`, `interest`,
+`statement`. Later milestones (`treasury`/`loan` in M6) each add their own
+schema the same way when they land — not created speculatively ahead of the
+code that needs them.
 
 Rule: **no cross-schema foreign keys.** A module reaches another module's
 data only through that module's own service/repository, never a raw join.
@@ -69,9 +69,10 @@ cd backend && ./gradlew update generateJooq
 (`update` applies the changelog via the Liquibase Gradle plugin;
 `generateJooq` — from the `nu.studer.jooq` plugin — then reads the resulting
 schema. `generateJooq.dependsOn update` is already wired in `build.gradle`.)
-Codegen is configured for the `customer`/`account`/`ledger`/`transaction`
-schemas; add new schemas to the `jooq { … database { schemata { … } } }`
-block in `build.gradle` alongside their first Liquibase changeset.
+Codegen is configured for the `customer`/`account`/`ledger`/`transaction`/
+`interest`/`statement` schemas; add new schemas to the
+`jooq { … database { schemata { … } } }` block in `build.gradle` alongside
+their first Liquibase changeset.
 
 ## Liquibase changelog path must match between the Gradle task and Spring Boot
 The `liquibase` Gradle plugin's `update` task (used for `generateJooq`, see

@@ -23,10 +23,10 @@ public class AccountRepository {
         this.dsl = dsl;
     }
 
-    public Account insert(long customerId, String accountType) {
+    public Account insert(long customerId, AccountType accountType) {
         var record = dsl.insertInto(ACCOUNTS)
                 .set(ACCOUNTS.CUSTOMER_ID, customerId)
-                .set(ACCOUNTS.ACCOUNT_TYPE, accountType)
+                .set(ACCOUNTS.ACCOUNT_TYPE, accountType.name())
                 .returning()
                 .fetchOne();
         return toAccount(record);
@@ -88,7 +88,7 @@ public class AccountRepository {
         return new Account(
                 record.getId(),
                 record.getCustomerId(),
-                record.getAccountType(),
+                AccountType.valueOf(record.getAccountType()),
                 record.getCurrentBalance(),
                 record.getCreatedAt());
     }

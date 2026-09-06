@@ -119,6 +119,12 @@ jooq {
 							schema {
 								inputSchema = 'transaction'
 							}
+							schema {
+								inputSchema = 'interest'
+							}
+							schema {
+								inputSchema = 'statement'
+							}
 						}
 					}
 					target {

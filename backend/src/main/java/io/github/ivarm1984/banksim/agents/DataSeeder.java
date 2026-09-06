@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
+import io.github.ivarm1984.banksim.account.AccountType;
 import io.github.ivarm1984.banksim.customer.CustomerService;
 
 /**
@@ -40,8 +41,8 @@ public class DataSeeder implements ApplicationRunner {
 
         for (int i = 0; i < DEMO_CUSTOMER_NAMES.size(); i++) {
             var customer = customerService.create(DEMO_CUSTOMER_NAMES.get(i));
-            Account checking = accountService.open(customer.id(), "CHECKING");
-            accountService.open(customer.id(), "SAVINGS");
+            Account checking = accountService.open(customer.id(), AccountType.CHECKING);
+            accountService.open(customer.id(), AccountType.SAVINGS);
             registerAgent(checking.id(), i % 3, i);
         }
     }

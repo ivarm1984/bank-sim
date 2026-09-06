@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import io.github.ivarm1984.banksim.PostgresIntegrationTest;
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
+import io.github.ivarm1984.banksim.account.AccountType;
 import io.github.ivarm1984.banksim.customer.Customer;
 import io.github.ivarm1984.banksim.customer.CustomerService;
 import io.github.ivarm1984.banksim.ledger.InsufficientFundsException;
@@ -26,7 +27,7 @@ class TransactionServiceTest extends PostgresIntegrationTest {
 
     private Account openAccount() {
         Customer customer = customerService.create("Ada Lovelace");
-        return accountService.open(customer.id(), "CHECKING");
+        return accountService.open(customer.id(), AccountType.CHECKING);
     }
 
     @Test

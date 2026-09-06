@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import io.github.ivarm1984.banksim.PostgresIntegrationTest;
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
+import io.github.ivarm1984.banksim.account.AccountType;
 import io.github.ivarm1984.banksim.customer.CustomerService;
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
 import io.github.ivarm1984.banksim.transaction.TransactionService;
@@ -29,7 +30,7 @@ class SalaryAgentTest extends PostgresIntegrationTest {
     @Test
     void paysOnlyOnPaydayAndOnlyOnceEvenIfTickedTwiceTheSameDay() {
         var customer = customerService.create("Test Customer");
-        Account checking = accountService.open(customer.id(), "CHECKING");
+        Account checking = accountService.open(customer.id(), AccountType.CHECKING);
         AgentContext context = new AgentContext(transactionService, accountService, events);
         SalaryAgent agent = new SalaryAgent(checking.id(), new BigDecimal("3000.00"), 1);
 
@@ -43,7 +44,7 @@ class SalaryAgentTest extends PostgresIntegrationTest {
     @Test
     void doesNotPayOnNonPayday() {
         var customer = customerService.create("Test Customer");
-        Account checking = accountService.open(customer.id(), "CHECKING");
+        Account checking = accountService.open(customer.id(), AccountType.CHECKING);
         AgentContext context = new AgentContext(transactionService, accountService, events);
         SalaryAgent agent = new SalaryAgent(checking.id(), new BigDecimal("3000.00"), 1);
 
@@ -55,7 +56,7 @@ class SalaryAgentTest extends PostgresIntegrationTest {
     @Test
     void paysAgainOnTheNextMonthsPayday() {
         var customer = customerService.create("Test Customer");
-        Account checking = accountService.open(customer.id(), "CHECKING");
+        Account checking = accountService.open(customer.id(), AccountType.CHECKING);
         AgentContext context = new AgentContext(transactionService, accountService, events);
         SalaryAgent agent = new SalaryAgent(checking.id(), new BigDecimal("3000.00"), 1);
 

@@ -15,3 +15,9 @@ databaseChangeLog:
   - include:
       file: transaction/db.changelog-transaction.yaml
       relativeToChangelogFile: true
+  - include:
+      file: interest/db.changelog-interest.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: statement/db.changelog-statement.yaml
+      relativeToChangelogFile: true
