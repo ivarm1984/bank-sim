@@ -1,0 +1,83 @@
+databaseChangeLog:
+  - changeSet:
+      id: treasury-0002-create-ratio-snapshots-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: treasury
+            tableName: ratio_snapshots
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: snapshot_date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  # Sum of BANK_CASH ledger lines at snapshot time.
+                  name: bank_cash
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Sum of CENTRAL_BANK_RESERVES ledger lines at snapshot time.
+                  name: central_bank_reserves
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Sum across every LOAN_RECEIVABLE ledger account.
+                  name: loans_receivable
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Sum across every CUSTOMER_LIABILITY ledger account.
+                  name: customer_deposits
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # BANK_CAPITAL + accumulated net income to date (no
+                  # retained-earnings sweep exists, so this is the CAR/NSFR
+                  # capital proxy - see AGENTS.md/TODO M6.4).
+                  name: capital_base
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: loan_to_deposit_ratio
+                  type: numeric(12,6)
+              - column:
+                  name: liquidity_coverage_ratio
+                  type: numeric(12,6)
+              - column:
+                  name: net_stable_funding_ratio
+                  type: numeric(12,6)
+              - column:
+                  name: required_reserves
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: reserve_coverage_ratio
+                  type: numeric(12,6)
+              - column:
+                  name: capital_adequacy_ratio
+                  type: numeric(12,6)
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              CREATE UNIQUE INDEX idx_ratio_snapshots_date
+              ON treasury.ratio_snapshots (snapshot_date);

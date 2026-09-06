@@ -299,8 +299,8 @@ already decided vs. still open.
       `LedgerReconciliationService.trialBalance().isBalanced()` true
       throughout; a `repay()` call on an already-`PAID_OFF` loan throws
 
-### M6.4 — TreasuryService ratios
-- [ ] `TreasuryService` — recomputes simplified ratios from aggregate ledger
+### M6.4 — TreasuryService ratios ✅ done
+- [x] `TreasuryService` — recomputes simplified ratios from aggregate ledger
       totals (end of day, chained off the existing batch, or on demand):
   - Loan-to-Deposit Ratio (LDR) — internal risk metric, not directly regulated
   - Liquidity Coverage Ratio (LCR), single number: reserves/HQLA ÷ estimated
@@ -312,9 +312,46 @@ already decided vs. still open.
     solvency)
   - Capital Adequacy Ratio — simplified CET1 vs. a rough risk-weighted-assets
     estimate; EU minimums 4.5% CET1 / 8% total capital + buffers (CRR)
-- [ ] REST: `GET /api/treasury/ratios`
-- [ ] Verify: ratios update after a loan is originated (LDR moves, LCR/NSFR
-      react); values match a hand-computed example off known balances
+  - Design calls made via `AskUserQuestion`: (1) ratios are persisted as a
+    daily snapshot (new `treasury` schema, `ratio_snapshots` table, one row
+    per sim-day) chained off the EOD batch, rather than computed purely
+    on-demand — gives ratio history for free for later milestones (M6.5's
+    feedback loop, a future CEO-mode chart); (2) "capital" for CAR/NSFR is
+    `BANK_CAPITAL` + accumulated net income to date
+    (`INTEREST_INCOME + FEE_INCOME − INTEREST_EXPENSE`), not paid-in capital
+    alone — there's no retained-earnings sweep in this system, so income/
+    expense ledger accounts stay permanent rather than closing into
+    `BANK_CAPITAL`; without adding net income back in, CAR would never move
+    except through RWA and would misstate the bank's real capital position
+  - Every other rate/factor (LCR's 10% assumed 30-day deposit runoff, NSFR's
+    90% deposit ASF factor / 85% loan RSF factor, 100% loan risk weight for
+    RWA) is a flat illustrative constant in `TreasuryService`, same spirit as
+    `LoanService.RISK_SPREAD` — real CRR/CRR2 breaks each of these down by
+    category/maturity, deferred to "Complex additions" below
+  - Ratio fields are `null` (not zero or an exception) when their denominator
+    is zero — e.g. NSFR/CAR before any loan has ever been originated, since
+    both have the loan book in their denominator
+  - Chaining needed a new `StatementGenerationBatchCompletedEvent` (statement
+    generation previously had no batch-completion event to chain off of,
+    unlike interest accrual) — `StatementGenerationScheduler` now publishes
+    it after generating every account's statement for the day, and
+    `TreasuryRatioScheduler` listens for it the same way
+    `StatementGenerationScheduler` listens for `InterestAccrualBatchCompletedEvent`
+- [x] REST: `GET /api/treasury/ratios` — 404 until at least one simulated day
+      has passed (no snapshot yet), otherwise the latest snapshot
+- [x] Verify: confirmed live via `POST /api/clock/step-day` +
+      `GET /api/treasury/ratios` — every field hand-verified against
+      `GET /api/ledger/accounts` on a fresh dev DB (LDR/LCR/NSFR/reserve-
+      coverage/CAR all matched the formulas above to 6 decimal places);
+      NSFR/CAR were `null` before any loan existed; after
+      `POST /api/loans` (5,000.00 principal) + another `step-day`, LDR moved
+      0 → 0.280616 and NSFR/CAR went from `null` to real numbers, all
+      matching hand computation off the same `GET /api/ledger/accounts`
+      snapshot. `TreasuryServiceTest` (Testcontainers Postgres) covers the
+      same two things at the unit level: a persisted snapshot's ratios are
+      internally consistent with its own raw balances, and originating/
+      disbursing a loan moves `loansReceivable`/`customerDeposits` by exactly
+      the principal while leaving `bankCash`/`centralBankReserves` untouched.
 
 ### M6.5 — Feedback loop
 - [ ] Feedback loop: if LCR/NSFR/capital ratio breaches its threshold,

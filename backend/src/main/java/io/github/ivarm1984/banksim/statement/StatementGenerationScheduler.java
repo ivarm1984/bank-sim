@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
+import io.github.ivarm1984.banksim.event.DomainEventPublisher;
 import io.github.ivarm1984.banksim.interest.InterestAccrualBatchCompletedEvent;
 
 /**
@@ -22,10 +23,13 @@ public class StatementGenerationScheduler {
 
     private final AccountService accountService;
     private final StatementGenerationService statementGenerationService;
+    private final DomainEventPublisher events;
 
-    public StatementGenerationScheduler(AccountService accountService, StatementGenerationService statementGenerationService) {
+    public StatementGenerationScheduler(
+            AccountService accountService, StatementGenerationService statementGenerationService, DomainEventPublisher events) {
         this.accountService = accountService;
         this.statementGenerationService = statementGenerationService;
+        this.events = events;
     }
 
     @EventListener
@@ -37,5 +41,6 @@ public class StatementGenerationScheduler {
                 log.warn("Statement generation failed for account {} on {}", account.id(), event.date(), e);
             }
         }
+        events.publish(new StatementGenerationBatchCompletedEvent(event.date()));
     }
 }
