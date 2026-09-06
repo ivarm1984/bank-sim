@@ -353,12 +353,69 @@ already decided vs. still open.
       disbursing a loan moves `loansReceivable`/`customerDeposits` by exactly
       the principal while leaving `bankCash`/`centralBankReserves` untouched.
 
-### M6.5 — Feedback loop
-- [ ] Feedback loop: if LCR/NSFR/capital ratio breaches its threshold,
+### M6.5 — Feedback loop ✅ done
+- [x] Feedback loop: if LCR/NSFR/capital ratio breaches its threshold,
       treasury either throttles new loan origination or auto-borrows reserves
       from the central bank facility; publishes `TreasuryRatiosUpdatedEvent`
-- [ ] Verify: forcing a large loan pushes LCR below 100% and triggers the
-      throttle/borrow path
+  - Design calls made via `AskUserQuestion`: (1) the two responses are split
+    by *which* ratio breaches, not "any breach → both" - LCR/reserve-coverage
+    (liquidity shortfalls) auto-borrow central bank reserves, since that
+    directly fixes those ratios; NSFR/CAR (capital/funding-structure
+    shortfalls) throttle loan origination instead, since borrowing reserves
+    doesn't fix those - mirrors why a real bank can't borrow its way out of a
+    capital problem; (2) the central bank facility is a real interest-bearing
+    liability (new singleton `CENTRAL_BANK_BORROWINGS` ledger account,
+    reusing the existing `INTEREST_EXPENSE` singleton for its cost) rather
+    than a one-shot balance-sheet plug - `TreasuryService.accrueBorrowingInterest`
+    capitalizes one day's interest at the marginal lending rate into the
+    balance every `DayRolledOverEvent` (day-count convention, same as
+    customer interest), and `applyFeedback`'s repay side is the facility's
+    repayment path (see below), so there's no separate table/repayment
+    endpoint needed; (3) the throttle is a hard block -
+    `LoanService.originate()` throws `IllegalStateException` (400) for as
+    long as the latest treasury snapshot shows NSFR<100% or CAR<8%
+  - `TreasuryService.applyFeedback(snapshot)` recomputes HQLA/outflow/reserve
+    headroom from the snapshot's own already-persisted raw balances (not a
+    fresh ledger read) - a breach draws exactly the worse of the two
+    shortfalls (Debit CENTRAL_BANK_RESERVES, Credit CENTRAL_BANK_BORROWINGS);
+    absent a breach, any outstanding facility balance is repaid using only
+    the headroom that keeps both ratios at/above 100% afterward (reverse
+    posting). The snapshot itself is deliberately left as its "as-detected"
+    reading - the correction shows up in *tomorrow's* snapshot, same as a
+    real treasury desk reacting overnight to an EOD report
+  - `TreasuryService.isLoanOriginationThrottled()` (used by both
+    `LoanService.originate()` and a new `GET /api/treasury/loan-origination-status`)
+    and `applyFeedback`'s throttled flag share one `isCapitalBreach` check;
+    false before any snapshot has ever been computed
+  - `TreasuryRatioScheduler` now also listens on `DayRolledOverEvent`
+    (alongside, not chained after, `InterestAccrualScheduler`'s customer
+    interest accrual) to drive `accrueBorrowingInterest` before the day's
+    ratio snapshot/feedback runs off `StatementGenerationBatchCompletedEvent`
+  - New `LedgerAccountService.singletonCreditBalance(type)` - the facility's
+    outstanding balance, needed by both interest accrual and the repay-cap
+    calculation
+- [x] Verify: forcing a large loan pushes LCR below 100% and triggers the
+      throttle/borrow path — confirmed live: originated a 20,000,000
+      principal loan (pre-existing dev DB had ~1,000,000 bank capital, 5,000
+      loans receivable), then stepped the clock forward. The EOD snapshot
+      showed `capitalAdequacyRatio: 0.049843` (below the 8% minimum) and
+      `liquidityCoverageRatio` restored to exactly `1.000000` — confirming
+      `centralBankReserves` had jumped from 1,000,000.00 to 1,991,681.29 (an
+      auto-borrow of exactly the LCR shortfall) — while
+      `GET /api/treasury/loan-origination-status` reported
+      `{"throttled":true}` and a second `POST /api/loans` was rejected 400
+      ("Loan origination is currently throttled..."). Stepping another day
+      showed `CENTRAL_BANK_BORROWINGS` compounding daily (991,681.29 →
+      992,034.54 → ...) and `capitalBase` falling by exactly that day's
+      interest, with `GET /api/ledger/trial-balance` staying balanced
+      throughout. `TreasuryServiceTest` covers the same borrow/repay/throttle
+      logic in isolation via hand-crafted snapshots (since `applyFeedback`
+      only reads the snapshot it's handed, never the live ledger, to decide
+      a breach) - the repay-recovery test deliberately uses a huge headroom
+      snapshot so it fully clears the facility (and self-cleans) regardless
+      of run order in this shared-Postgres-container suite, and the
+      throttle test restores a healthy snapshot in a `finally` so it doesn't
+      leave later test classes permanently throttled.
 
 ### M6.6 — BorrowerAgent + end-to-end verify
 - [ ] `BorrowerAgent`: applies for a loan occasionally, then pays on schedule

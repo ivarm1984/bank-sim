@@ -1,0 +1,15 @@
+databaseChangeLog:
+  - changeSet:
+      id: ledger-data-0004-seed-central-bank-borrowings-account
+      author: ivarm1984
+      changes:
+        - insert:
+            schemaName: ledger
+            tableName: ledger_accounts
+            columns:
+              - column:
+                  name: type
+                  value: CENTRAL_BANK_BORROWINGS
+              - column:
+                  name: name
+                  value: Central Bank Borrowings

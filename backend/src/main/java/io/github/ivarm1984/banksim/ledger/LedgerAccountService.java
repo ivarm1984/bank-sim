@@ -101,6 +101,15 @@ public class LedgerAccountService {
                         record.get(totalCredits)));
     }
 
+    /** Current credit-normal balance (credits minus debits) of a singleton liability/equity/income account, e.g. an outstanding facility balance. */
+    public BigDecimal singletonCreditBalance(LedgerAccountType type) {
+        return findAllWithBalances().stream()
+                .filter(b -> b.type() == type)
+                .map(b -> b.totalCredits().subtract(b.totalDebits()))
+                .findFirst()
+                .orElse(BigDecimal.ZERO);
+    }
+
     /** True if any journal lines have ever been posted against this ledger account. */
     public boolean hasAnyLedgerLines(long ledgerAccountId) {
         return dsl.fetchExists(dsl.selectFrom(LEDGER_LINES).where(LEDGER_LINES.LEDGER_ACCOUNT_ID.eq(ledgerAccountId)));

@@ -9,9 +9,15 @@ import java.util.NoSuchElementException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import io.github.ivarm1984.banksim.centralbank.CentralBankService;
+import io.github.ivarm1984.banksim.event.DomainEventPublisher;
+import io.github.ivarm1984.banksim.ledger.EntryType;
+import io.github.ivarm1984.banksim.ledger.JournalEntryRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountBalance;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
+import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
+import io.github.ivarm1984.banksim.ledger.LedgerService;
 
 /**
  * Simplified, single-number versions of the EU treasury/liquidity ratios -
@@ -52,12 +58,25 @@ public class TreasuryService {
     /** Risk weight applied to the loan book for the CAR denominator - central bank reserves/cash get 0% (sovereign exposure), loans a flat 100% (unrated standardized-approach exposure). */
     static final BigDecimal LOAN_RISK_WEIGHT = BigDecimal.ONE;
 
+    /** EU minimum total capital ratio (CRR), ignoring the combined buffers real CRR layers on top. */
+    static final BigDecimal CAR_MINIMUM = new BigDecimal("0.08");
+
+    private static final BigDecimal DAYS_PER_YEAR = new BigDecimal("365");
+
     private final LedgerAccountService ledgerAccountService;
     private final TreasuryRatioRepository repository;
+    private final LedgerService ledgerService;
+    private final CentralBankService centralBankService;
+    private final DomainEventPublisher events;
 
-    public TreasuryService(LedgerAccountService ledgerAccountService, TreasuryRatioRepository repository) {
+    public TreasuryService(
+            LedgerAccountService ledgerAccountService, TreasuryRatioRepository repository, LedgerService ledgerService,
+            CentralBankService centralBankService, DomainEventPublisher events) {
         this.ledgerAccountService = ledgerAccountService;
         this.repository = repository;
+        this.ledgerService = ledgerService;
+        this.centralBankService = centralBankService;
+        this.events = events;
     }
 
     /** Recomputes every ratio from the current ledger totals and persists one snapshot row for {@code date}. */
@@ -87,6 +106,108 @@ public class TreasuryService {
     public TreasuryRatioSnapshot latest() {
         return repository.findMostRecent()
                 .orElseThrow(() -> new NoSuchElementException("No treasury ratio snapshot yet - run at least one simulated day"));
+    }
+
+    /**
+     * True while the latest snapshot shows a capital/funding-structure
+     * breach (NSFR or CAR below its EU minimum) - {@code LoanService}
+     * consults this before originating a new loan. A liquidity breach
+     * (LCR/reserve-coverage) does *not* throttle lending - that's handled by
+     * {@link #applyFeedback} auto-borrowing reserves instead, since it's a
+     * problem borrowing central bank reserves actually fixes. False before
+     * any snapshot has ever been computed.
+     */
+    public boolean isLoanOriginationThrottled() {
+        return repository.findMostRecent().map(TreasuryService::isCapitalBreach).orElse(false);
+    }
+
+    /**
+     * Reacts to one day's snapshot: a liquidity breach (LCR or reserve
+     * coverage below 100%) draws exactly enough from the central bank's
+     * marginal lending facility to cover the worse of the two shortfalls
+     * (Debit CENTRAL_BANK_RESERVES, Credit CENTRAL_BANK_BORROWINGS); absent a
+     * breach, any outstanding facility balance is repaid using only the
+     * headroom that keeps both ratios at or above 100% afterward (Debit
+     * CENTRAL_BANK_BORROWINGS, Credit CENTRAL_BANK_RESERVES). Always
+     * publishes {@link TreasuryRatiosUpdatedEvent}, even when no action was
+     * taken. The snapshot itself is left untouched - it's this day's
+     * "as-detected" reading; the correction shows up in tomorrow's snapshot,
+     * same as a real treasury desk reacting overnight to an EOD report.
+     */
+    @Transactional
+    public void applyFeedback(TreasuryRatioSnapshot snapshot) {
+        BigDecimal hqla = snapshot.bankCash().add(snapshot.centralBankReserves());
+        BigDecimal estimatedThirtyDayOutflow = snapshot.customerDeposits().multiply(LCR_OUTFLOW_RATE);
+        BigDecimal hqlaHeadroom = hqla.subtract(estimatedThirtyDayOutflow);
+        BigDecimal reserveHeadroom = snapshot.centralBankReserves().subtract(snapshot.requiredReserves());
+
+        BigDecimal amountBorrowed = BigDecimal.ZERO;
+        BigDecimal amountRepaid = BigDecimal.ZERO;
+        if (hqlaHeadroom.signum() < 0 || reserveHeadroom.signum() < 0) {
+            amountBorrowed = hqlaHeadroom.negate().max(reserveHeadroom.negate()).max(BigDecimal.ZERO)
+                    .setScale(2, RoundingMode.HALF_UP);
+            if (amountBorrowed.signum() > 0) {
+                postCentralBankFacilityMovement("draw", amountBorrowed, EntryType.DEBIT, snapshot.snapshotDate());
+            }
+        } else {
+            BigDecimal outstanding = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
+            amountRepaid = outstanding.min(hqlaHeadroom).min(reserveHeadroom).max(BigDecimal.ZERO)
+                    .setScale(2, RoundingMode.HALF_UP);
+            if (amountRepaid.signum() > 0) {
+                postCentralBankFacilityMovement("repayment", amountRepaid, EntryType.CREDIT, snapshot.snapshotDate());
+            }
+        }
+
+        events.publish(new TreasuryRatiosUpdatedEvent(
+                snapshot.snapshotDate(), isCapitalBreach(snapshot), amountBorrowed, amountRepaid));
+    }
+
+    /**
+     * Accrues one day's interest on the outstanding central bank facility
+     * balance (day-count, at the marginal lending rate - same convention
+     * {@code InterestAccrualService} uses for customer accounts), posted as
+     * Debit INTEREST_EXPENSE / Credit CENTRAL_BANK_BORROWINGS (capitalized
+     * into the balance, same as customer interest accrual). No-op while the
+     * facility balance is zero.
+     */
+    @Transactional
+    public void accrueBorrowingInterest(LocalDate date) {
+        BigDecimal outstanding = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
+        if (outstanding.signum() <= 0) {
+            return;
+        }
+
+        BigDecimal dailyRate = centralBankService.currentRates().marginalLendingRate()
+                .divide(DAYS_PER_YEAR, 10, RoundingMode.HALF_UP);
+        BigDecimal interest = outstanding.multiply(dailyRate).setScale(2, RoundingMode.HALF_UP);
+        if (interest.signum() <= 0) {
+            return;
+        }
+
+        long interestExpenseId = ledgerAccountService.getSingleton(LedgerAccountType.INTEREST_EXPENSE).id();
+        long borrowingsId = ledgerAccountService.getSingleton(LedgerAccountType.CENTRAL_BANK_BORROWINGS).id();
+        ledgerService.post(new JournalEntryRequest(
+                "Central bank facility interest for " + date,
+                List.of(
+                        new LedgerLineRequest(interestExpenseId, EntryType.DEBIT, interest),
+                        new LedgerLineRequest(borrowingsId, EntryType.CREDIT, interest))));
+    }
+
+    private void postCentralBankFacilityMovement(String description, BigDecimal amount, EntryType reservesSide, LocalDate date) {
+        long reservesId = ledgerAccountService.getSingleton(LedgerAccountType.CENTRAL_BANK_RESERVES).id();
+        long borrowingsId = ledgerAccountService.getSingleton(LedgerAccountType.CENTRAL_BANK_BORROWINGS).id();
+        EntryType borrowingsSide = reservesSide == EntryType.DEBIT ? EntryType.CREDIT : EntryType.DEBIT;
+        ledgerService.post(new JournalEntryRequest(
+                "Central bank facility " + description + " on " + date,
+                List.of(
+                        new LedgerLineRequest(reservesId, reservesSide, amount),
+                        new LedgerLineRequest(borrowingsId, borrowingsSide, amount))));
+    }
+
+    private static boolean isCapitalBreach(TreasuryRatioSnapshot snapshot) {
+        boolean nsfrBreach = snapshot.netStableFundingRatio() != null && snapshot.netStableFundingRatio().compareTo(BigDecimal.ONE) < 0;
+        boolean carBreach = snapshot.capitalAdequacyRatio() != null && snapshot.capitalAdequacyRatio().compareTo(CAR_MINIMUM) < 0;
+        return nsfrBreach || carBreach;
     }
 
     private Balances currentBalances() {

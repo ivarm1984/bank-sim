@@ -18,4 +18,12 @@ public class TreasuryController {
     public TreasuryRatioSnapshot ratios() {
         return treasuryService.latest();
     }
+
+    @GetMapping("/loan-origination-status")
+    public LoanOriginationStatus loanOriginationStatus() {
+        return new LoanOriginationStatus(treasuryService.isLoanOriginationThrottled());
+    }
+
+    public record LoanOriginationStatus(boolean throttled) {
+    }
 }

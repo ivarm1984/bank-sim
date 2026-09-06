@@ -18,6 +18,7 @@ import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
 import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerService;
+import io.github.ivarm1984.banksim.treasury.TreasuryService;
 
 /**
  * Loan origination, disbursement, and repayment (including partial/full
@@ -57,16 +58,19 @@ public class LoanService {
     private final CentralBankService centralBankService;
     private final ClockService clockService;
     private final DomainEventPublisher events;
+    private final TreasuryService treasuryService;
 
     public LoanService(
             LoanRepository loanRepository, LedgerService ledgerService, LedgerAccountService ledgerAccountService,
-            CentralBankService centralBankService, ClockService clockService, DomainEventPublisher events) {
+            CentralBankService centralBankService, ClockService clockService, DomainEventPublisher events,
+            TreasuryService treasuryService) {
         this.loanRepository = loanRepository;
         this.ledgerService = ledgerService;
         this.ledgerAccountService = ledgerAccountService;
         this.centralBankService = centralBankService;
         this.clockService = clockService;
         this.events = events;
+        this.treasuryService = treasuryService;
     }
 
     /**
@@ -81,6 +85,10 @@ public class LoanService {
         }
         if (termMonths <= 0) {
             throw new IllegalArgumentException("Term must be positive");
+        }
+        if (treasuryService.isLoanOriginationThrottled()) {
+            throw new IllegalStateException(
+                    "Loan origination is currently throttled: treasury's capital/funding ratio is below its regulatory minimum");
         }
 
         BigDecimal annualRate = centralBankService.currentRates().policyRate().add(RISK_SPREAD);

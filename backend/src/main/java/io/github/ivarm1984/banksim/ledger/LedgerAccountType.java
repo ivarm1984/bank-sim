@@ -16,5 +16,7 @@ public enum LedgerAccountType {
     /** One per Loan: what the customer owes the bank. */
     LOAN_RECEIVABLE,
     /** Singleton income account: interest earned on loans. */
-    INTEREST_INCOME
+    INTEREST_INCOME,
+    /** Singleton liability account: outstanding draws on the central bank's marginal lending facility. */
+    CENTRAL_BANK_BORROWINGS
 }
