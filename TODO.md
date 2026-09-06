@@ -111,20 +111,38 @@ checklist below is the actionable build order.
       still zero
 
 ## M5 — WebSocket + Vue dashboard
-- [ ] `web` package: `WebSocketConfig` (STOMP over SockJS, `/ws`,
+- [x] `web` package: `WebSocketConfig` (STOMP over SockJS, `/ws`,
       `enableSimpleBroker("/topic")`)
-- [ ] `EventFeedPublisher`: `@TransactionalEventListener(AFTER_COMMIT)` + `@Async`
+- [x] `EventFeedPublisher`: `@TransactionalEventListener(AFTER_COMMIT)` + `@Async`
       bridge from every domain event → `/topic/events`; clock state → `/topic/clock`
-- [ ] Frontend: `api/` (REST clients), `ws/stompClient.ts`, Pinia `stores/`
+  - Added `TransactionCompletedEvent` (published from `TransactionService`) since
+    no event previously existed for deposit/withdraw/transfer; added
+    `GET /api/ledger/accounts` and `GET /api/ledger/trial-balance` to back
+    `LedgerInspector` (no ledger REST existed before this milestone)
+- [x] Frontend: `api/` (REST clients, axios), `ws/stompClient.ts`, Pinia `stores/`
       (accounts, customers, clock, event feed), `views/DashboardView.vue`,
       `components/` (SimulationControls, AccountsList, EventFeed, TransactionLog,
-      StatementViewer, LedgerInspector)
-- [ ] Wire: REST populates initial store state on mount; WS events patch stores
+      StatementViewer, LedgerInspector) — styled with Tailwind CSS
+- [x] Wire: REST populates initial store state on mount; WS events patch stores
       live; periodic REST re-sync to correct drift
-- [ ] Vite dev server proxies `/api` and `/ws` to `localhost:8080`
-- [ ] Verify: Play in browser, EventFeed populates live (check STOMP frames in
+- [x] Vite dev server proxies `/api` and `/ws` to `localhost:8080`
+- [x] Verify: Play in browser, EventFeed populates live (check STOMP frames in
       devtools), balances update live, speed/Pause/Step Day work, WS-driven UI
       state matches `GET /api/accounts` REST truth
+  - Verified live in Chrome: Play advances the sim-time header via `/topic/clock`;
+    Step Day produced "Interest accrual batch completed" and "Simulated day
+    rolled over" entries in the live Event feed via `/topic/events`; Pause
+    stopped the clock and the UI's displayed state matched `GET
+    /api/clock/state` exactly; Ledger's trial-balance banner showed balanced
+    throughout. Found and fixed two real bugs during this pass (not caught by
+    `./gradlew test` or `npm run build`, since neither exercises the app at
+    runtime): (1) sockjs-client references the Node global `global`, which
+    Vite doesn't polyfill — fixed with `define: { global: 'globalThis' }` in
+    `vite.config.ts`; (2) adding `@EnableWebSocketMessageBroker` introduced
+    multiple candidate `Executor` beans, leaving `@Async` unable to pick one
+    unambiguously (silently fell back to `SimpleAsyncTaskExecutor` with a
+    logged warning) — fixed with an explicit `taskExecutor` bean in the new
+    `web/AsyncConfig.java`.
 
 ## M6 — Treasury & loans (simplified)
 

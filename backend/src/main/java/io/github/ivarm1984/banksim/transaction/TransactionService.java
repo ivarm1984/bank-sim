@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import io.github.ivarm1984.banksim.event.DomainEventPublisher;
 import io.github.ivarm1984.banksim.ledger.EntryType;
 import io.github.ivarm1984.banksim.ledger.JournalEntryRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
@@ -19,11 +20,17 @@ public class TransactionService {
     private final LedgerService ledgerService;
     private final LedgerAccountService ledgerAccountService;
     private final TransactionRepository transactionRepository;
+    private final DomainEventPublisher events;
 
-    public TransactionService(LedgerService ledgerService, LedgerAccountService ledgerAccountService, TransactionRepository transactionRepository) {
+    public TransactionService(
+            LedgerService ledgerService,
+            LedgerAccountService ledgerAccountService,
+            TransactionRepository transactionRepository,
+            DomainEventPublisher events) {
         this.ledgerService = ledgerService;
         this.ledgerAccountService = ledgerAccountService;
         this.transactionRepository = transactionRepository;
+        this.events = events;
     }
 
     @Transactional
@@ -38,7 +45,9 @@ public class TransactionService {
                         new LedgerLineRequest(bankCashId, EntryType.DEBIT, amount),
                         new LedgerLineRequest(liabilityId, EntryType.CREDIT, amount))));
 
-        return transactionRepository.insert(TransactionType.DEPOSIT, null, accountId, amount, journalEntryId);
+        Transaction transaction = transactionRepository.insert(TransactionType.DEPOSIT, null, accountId, amount, journalEntryId);
+        publishCompleted(transaction);
+        return transaction;
     }
 
     @Transactional
@@ -53,7 +62,9 @@ public class TransactionService {
                         new LedgerLineRequest(liabilityId, EntryType.DEBIT, amount),
                         new LedgerLineRequest(bankCashId, EntryType.CREDIT, amount))));
 
-        return transactionRepository.insert(TransactionType.WITHDRAWAL, accountId, null, amount, journalEntryId);
+        Transaction transaction = transactionRepository.insert(TransactionType.WITHDRAWAL, accountId, null, amount, journalEntryId);
+        publishCompleted(transaction);
+        return transaction;
     }
 
     @Transactional
@@ -71,7 +82,9 @@ public class TransactionService {
                         new LedgerLineRequest(fromLiabilityId, EntryType.DEBIT, amount),
                         new LedgerLineRequest(toLiabilityId, EntryType.CREDIT, amount))));
 
-        return transactionRepository.insert(TransactionType.TRANSFER, fromAccountId, toAccountId, amount, journalEntryId);
+        Transaction transaction = transactionRepository.insert(TransactionType.TRANSFER, fromAccountId, toAccountId, amount, journalEntryId);
+        publishCompleted(transaction);
+        return transaction;
     }
 
     public List<Transaction> findAll() {
@@ -82,5 +95,15 @@ public class TransactionService {
         if (amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("Amount must be positive");
         }
+    }
+
+    private void publishCompleted(Transaction transaction) {
+        events.publish(new TransactionCompletedEvent(
+                transaction.id(),
+                transaction.type(),
+                transaction.fromAccountId(),
+                transaction.toAccountId(),
+                transaction.amount(),
+                transaction.createdAt()));
     }
 }

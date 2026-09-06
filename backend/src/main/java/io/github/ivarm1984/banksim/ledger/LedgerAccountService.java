@@ -1,7 +1,13 @@
 package io.github.ivarm1984.banksim.ledger;
 
 import static io.github.ivarm1984.banksim.jooq.ledger.tables.LedgerAccounts.LEDGER_ACCOUNTS;
+import static io.github.ivarm1984.banksim.jooq.ledger.tables.LedgerLines.LEDGER_LINES;
+import static org.jooq.impl.DSL.case_;
+import static org.jooq.impl.DSL.coalesce;
+import static org.jooq.impl.DSL.sum;
 
+import java.math.BigDecimal;
+import java.util.List;
 import java.util.NoSuchElementException;
 
 import org.jooq.DSLContext;
@@ -49,6 +55,26 @@ public class LedgerAccountService {
             throw new NoSuchElementException("No customer liability ledger account for account " + accountId);
         }
         return toLedgerAccount(record);
+    }
+
+    /** Every ledger account with its total debits/credits posted so far, for the ledger inspector view. */
+    public List<LedgerAccountBalance> findAllWithBalances() {
+        BigDecimal zero = BigDecimal.ZERO;
+        var totalDebits = coalesce(sum(case_(LEDGER_LINES.ENTRY_TYPE).when(EntryType.DEBIT.name(), LEDGER_LINES.AMOUNT)), zero);
+        var totalCredits = coalesce(sum(case_(LEDGER_LINES.ENTRY_TYPE).when(EntryType.CREDIT.name(), LEDGER_LINES.AMOUNT)), zero);
+
+        return dsl.select(LEDGER_ACCOUNTS.ID, LEDGER_ACCOUNTS.TYPE, LEDGER_ACCOUNTS.ACCOUNT_ID, LEDGER_ACCOUNTS.NAME, totalDebits, totalCredits)
+                .from(LEDGER_ACCOUNTS)
+                .leftJoin(LEDGER_LINES).on(LEDGER_LINES.LEDGER_ACCOUNT_ID.eq(LEDGER_ACCOUNTS.ID))
+                .groupBy(LEDGER_ACCOUNTS.ID, LEDGER_ACCOUNTS.TYPE, LEDGER_ACCOUNTS.ACCOUNT_ID, LEDGER_ACCOUNTS.NAME)
+                .orderBy(LEDGER_ACCOUNTS.ID)
+                .fetch(record -> new LedgerAccountBalance(
+                        record.get(LEDGER_ACCOUNTS.ID),
+                        LedgerAccountType.valueOf(record.get(LEDGER_ACCOUNTS.TYPE)),
+                        record.get(LEDGER_ACCOUNTS.ACCOUNT_ID),
+                        record.get(LEDGER_ACCOUNTS.NAME),
+                        record.get(totalDebits),
+                        record.get(totalCredits)));
     }
 
     public LedgerAccount findById(long id) {
