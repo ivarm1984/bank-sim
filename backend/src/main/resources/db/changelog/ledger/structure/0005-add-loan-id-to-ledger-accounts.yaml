@@ -1,0 +1,26 @@
+databaseChangeLog:
+  - changeSet:
+      id: ledger-0005-add-loan-id-to-ledger-accounts
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: ledger
+            tableName: ledger_accounts
+            columns:
+              - column:
+                  # Soft reference to loan.loans(id) - no cross-schema FK,
+                  # see AGENTS.md. Set for the one LOAN_RECEIVABLE ledger
+                  # account per Loan; null otherwise. Mirrors account_id,
+                  # which is null for a LOAN_RECEIVABLE row and vice versa -
+                  # see the CHECK constraint below.
+                  name: loan_id
+                  type: bigint
+                  constraints:
+                    nullable: true
+        - sql:
+            sql: >-
+              CREATE UNIQUE INDEX idx_ledger_accounts_loan_id
+              ON ledger.ledger_accounts (loan_id) WHERE loan_id IS NOT NULL;
+              ALTER TABLE ledger.ledger_accounts
+              ADD CONSTRAINT chk_ledger_accounts_account_xor_loan
+              CHECK (account_id IS NULL OR loan_id IS NULL);

@@ -1,0 +1,95 @@
+databaseChangeLog:
+  - changeSet:
+      id: loan-0002-create-loans-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: loan
+            tableName: loans
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  # Soft reference to customer.customers(id) - no
+                  # cross-schema FK, see AGENTS.md.
+                  name: customer_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  # Soft reference to account.accounts(id) - no cross-schema
+                  # FK, see AGENTS.md. Principal is disbursed into this
+                  # account and installments are debited from it.
+                  name: disbursement_account_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: principal
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Base (central bank policy rate) + flat risk spread,
+                  # locked in at origination - fixed-rate loan, never
+                  # revised even if the policy rate later drifts.
+                  name: annual_rate
+                  type: numeric(6,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: term_months
+                  type: int
+                  constraints:
+                    nullable: false
+              - column:
+                  # Fixed monthly payment computed at origination via the
+                  # standard amortization formula. Stays constant for the
+                  # life of the loan even across prepayments (term-reduction
+                  # style: extra principal shortens the loan rather than
+                  # lowering future installments).
+                  name: installment_amount
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: origination_date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  # Mutable - starts equal to principal, decreases on each
+                  # repay(); the source of truth for what's actually owed
+                  # (may diverge from loan_installments' plan after a
+                  # prepayment).
+                  name: outstanding_principal
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: next_installment_number
+                  type: int
+                  defaultValueNumeric: 1
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE loan.loans
+              ADD CONSTRAINT chk_loans_status
+              CHECK (status IN ('ACTIVE', 'PAID_OFF'));

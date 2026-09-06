@@ -12,5 +12,9 @@ public enum LedgerAccountType {
     /** Singleton asset account: the bank's reserves held at the central bank. */
     CENTRAL_BANK_RESERVES,
     /** Singleton equity account: the bank's own paid-in capital. */
-    BANK_CAPITAL
+    BANK_CAPITAL,
+    /** One per Loan: what the customer owes the bank. */
+    LOAN_RECEIVABLE,
+    /** Singleton income account: interest earned on loans. */
+    INTEREST_INCOME
 }

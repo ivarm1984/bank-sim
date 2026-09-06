@@ -6,6 +6,7 @@ public record LedgerAccountBalance(
         Long id,
         LedgerAccountType type,
         Long accountId,
+        Long loanId,
         String name,
         BigDecimal totalDebits,
         BigDecimal totalCredits) {

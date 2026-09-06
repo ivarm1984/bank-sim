@@ -6,6 +6,7 @@ public record LedgerAccount(
         Long id,
         LedgerAccountType type,
         Long accountId,
+        Long loanId,
         String name,
         OffsetDateTime createdAt) {
 }

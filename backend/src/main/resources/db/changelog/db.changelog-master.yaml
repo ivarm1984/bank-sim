@@ -21,3 +21,6 @@ databaseChangeLog:
   - include:
       file: statement/db.changelog-statement.yaml
       relativeToChangelogFile: true
+  - include:
+      file: loan/db.changelog-loan.yaml
+      relativeToChangelogFile: true

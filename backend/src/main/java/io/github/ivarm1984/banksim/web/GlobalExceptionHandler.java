@@ -18,7 +18,9 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ex.getMessage());
     }
 
-    @ExceptionHandler({InsufficientFundsException.class, UnbalancedJournalEntryException.class, IllegalArgumentException.class})
+    @ExceptionHandler({
+            InsufficientFundsException.class, UnbalancedJournalEntryException.class,
+            IllegalArgumentException.class, IllegalStateException.class})
     public ResponseEntity<String> handleBadRequest(RuntimeException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ex.getMessage());
     }

@@ -1,0 +1,57 @@
+databaseChangeLog:
+  - changeSet:
+      id: loan-0003-create-loan-installments-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: loan
+            tableName: loan_installments
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: loan_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    references: loan.loans(id)
+                    foreignKeyName: fk_loan_installments_loan
+              - column:
+                  name: installment_number
+                  type: int
+                  constraints:
+                    nullable: false
+              - column:
+                  name: due_date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  name: opening_balance
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: interest_portion
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: principal_portion
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: closing_balance
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              CREATE UNIQUE INDEX idx_loan_installments_loan_id_number
+              ON loan.loan_installments (loan_id, installment_number);

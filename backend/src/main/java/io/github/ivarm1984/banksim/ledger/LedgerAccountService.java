@@ -57,21 +57,45 @@ public class LedgerAccountService {
         return toLedgerAccount(record);
     }
 
+    /** Creates the one LOAN_RECEIVABLE ledger account for a newly disbursed Loan. */
+    public LedgerAccount createLoanReceivableAccount(long loanId) {
+        var record = dsl.insertInto(LEDGER_ACCOUNTS)
+                .set(LEDGER_ACCOUNTS.TYPE, LedgerAccountType.LOAN_RECEIVABLE.name())
+                .set(LEDGER_ACCOUNTS.LOAN_ID, loanId)
+                .set(LEDGER_ACCOUNTS.NAME, "Loan receivable for loan " + loanId)
+                .returning()
+                .fetchOne();
+        return toLedgerAccount(record);
+    }
+
+    /** Looks up the one LOAN_RECEIVABLE ledger account backing a Loan. */
+    public LedgerAccount findLoanReceivableAccount(long loanId) {
+        var record = dsl.selectFrom(LEDGER_ACCOUNTS)
+                .where(LEDGER_ACCOUNTS.LOAN_ID.eq(loanId))
+                .and(LEDGER_ACCOUNTS.TYPE.eq(LedgerAccountType.LOAN_RECEIVABLE.name()))
+                .fetchOne();
+        if (record == null) {
+            throw new NoSuchElementException("No loan receivable ledger account for loan " + loanId);
+        }
+        return toLedgerAccount(record);
+    }
+
     /** Every ledger account with its total debits/credits posted so far, for the ledger inspector view. */
     public List<LedgerAccountBalance> findAllWithBalances() {
         BigDecimal zero = BigDecimal.ZERO;
         var totalDebits = coalesce(sum(case_(LEDGER_LINES.ENTRY_TYPE).when(EntryType.DEBIT.name(), LEDGER_LINES.AMOUNT)), zero);
         var totalCredits = coalesce(sum(case_(LEDGER_LINES.ENTRY_TYPE).when(EntryType.CREDIT.name(), LEDGER_LINES.AMOUNT)), zero);
 
-        return dsl.select(LEDGER_ACCOUNTS.ID, LEDGER_ACCOUNTS.TYPE, LEDGER_ACCOUNTS.ACCOUNT_ID, LEDGER_ACCOUNTS.NAME, totalDebits, totalCredits)
+        return dsl.select(LEDGER_ACCOUNTS.ID, LEDGER_ACCOUNTS.TYPE, LEDGER_ACCOUNTS.ACCOUNT_ID, LEDGER_ACCOUNTS.LOAN_ID, LEDGER_ACCOUNTS.NAME, totalDebits, totalCredits)
                 .from(LEDGER_ACCOUNTS)
                 .leftJoin(LEDGER_LINES).on(LEDGER_LINES.LEDGER_ACCOUNT_ID.eq(LEDGER_ACCOUNTS.ID))
-                .groupBy(LEDGER_ACCOUNTS.ID, LEDGER_ACCOUNTS.TYPE, LEDGER_ACCOUNTS.ACCOUNT_ID, LEDGER_ACCOUNTS.NAME)
+                .groupBy(LEDGER_ACCOUNTS.ID, LEDGER_ACCOUNTS.TYPE, LEDGER_ACCOUNTS.ACCOUNT_ID, LEDGER_ACCOUNTS.LOAN_ID, LEDGER_ACCOUNTS.NAME)
                 .orderBy(LEDGER_ACCOUNTS.ID)
                 .fetch(record -> new LedgerAccountBalance(
                         record.get(LEDGER_ACCOUNTS.ID),
                         LedgerAccountType.valueOf(record.get(LEDGER_ACCOUNTS.TYPE)),
                         record.get(LEDGER_ACCOUNTS.ACCOUNT_ID),
+                        record.get(LEDGER_ACCOUNTS.LOAN_ID),
                         record.get(LEDGER_ACCOUNTS.NAME),
                         record.get(totalDebits),
                         record.get(totalCredits)));
@@ -98,6 +122,7 @@ public class LedgerAccountService {
                 record.getId(),
                 LedgerAccountType.valueOf(record.getType()),
                 record.getAccountId(),
+                record.getLoanId(),
                 record.getName(),
                 record.getCreatedAt());
     }

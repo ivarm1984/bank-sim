@@ -1,0 +1,15 @@
+databaseChangeLog:
+  - changeSet:
+      id: ledger-data-0003-seed-interest-income-account
+      author: ivarm1984
+      changes:
+        - insert:
+            schemaName: ledger
+            tableName: ledger_accounts
+            columns:
+              - column:
+                  name: type
+                  value: INTEREST_INCOME
+              - column:
+                  name: name
+                  value: Interest Income

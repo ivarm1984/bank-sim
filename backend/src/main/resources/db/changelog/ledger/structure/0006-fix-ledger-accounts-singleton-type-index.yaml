@@ -1,0 +1,18 @@
+databaseChangeLog:
+  - changeSet:
+      id: ledger-0006-fix-ledger-accounts-singleton-type-index
+      author: ivarm1984
+      comment: >-
+        idx_ledger_accounts_singleton_type only excluded account_id IS NOT
+        NULL rows, so it incorrectly treated every LOAN_RECEIVABLE row
+        (account_id NULL, loan_id set instead) as another singleton of the
+        same type and rejected the second loan ever created. A singleton row
+        is now one with BOTH account_id and loan_id null.
+      changes:
+        - sql:
+            sql: DROP INDEX ledger.idx_ledger_accounts_singleton_type;
+        - sql:
+            sql: >-
+              CREATE UNIQUE INDEX idx_ledger_accounts_singleton_type
+              ON ledger.ledger_accounts (type)
+              WHERE account_id IS NULL AND loan_id IS NULL;

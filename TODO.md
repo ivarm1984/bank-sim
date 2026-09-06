@@ -217,24 +217,87 @@ already decided vs. still open.
       down over a 16-simulated-year run (3.25% → 5.00% → 3.75% → 2.25% →
       3.25%), and a `clock/reset` reproduces the exact epoch-date rates again
 
-### M6.3 — Loan package + origination/repayment
-- [ ] `loan` package + schema: `LoanAccount` (principal, term, rate = base +
+### M6.3 — Loan package + origination/repayment ✅ done
+- [x] `loan` package + schema: `LoanAccount` (principal, term, rate = base +
       risk spread, amortization schedule)
-- [ ] Add `LOAN_RECEIVABLE` to `LedgerAccountType` (one per loan, analogous
-      to `CUSTOMER_LIABILITY`/`createCustomerLiabilityAccount`) — needs a
-      design call deferred from M6.1: `ledger_accounts.account_id` is a soft
-      reference specifically to `account.accounts(id)`, so a loan can't
-      safely reuse that column (id collision risk between the two
-      sequences); most likely a new nullable `loan_id` column + partial
-      unique index, mirroring the existing `account_id` one
-- [ ] `LoanService.originate/disburse/repay` — disbursement: Debit
+  - Design calls made via `AskUserQuestion`: (1) installment periods use
+    calendar-month arithmetic (`LocalDate.plusMonths(1)`), not fixed 30-day
+    periods; (2) the full amortization schedule is precomputed and persisted
+    at origination (`loan_installments`, one row per planned payment) and is
+    **never modified by later prepayments** - it's the original plan, not a
+    live view of what's owed; (3) `repay(loanId, amount)` supports normal
+    payment, partial early payoff, and full early payoff via one
+    amount-driven method (see below); (4) the risk spread is a flat
+    system-wide constant (`LoanService.RISK_SPREAD`, 400bps) added to the
+    central bank policy rate - real per-borrower credit risk pricing stays
+    deferred to "Complex additions" below
+  - Amortization uses a **nominal monthly periodic rate** (`annualRate /
+    12`), deliberately *not* the day-count (actual/365) convention
+    `InterestAccrualService` uses for savings/checking interest - monthly
+    amortizing loans conventionally price off a nominal periodic rate,
+    independent of how many calendar days actually fall in a given month.
+    Mixing the two conventions in one codebase is intentional, not
+    inconsistency - don't "fix" loan interest to use day-count.
+  - Prepayment is a **term-reduction model**: `installmentAmount` (fixed at
+    origination) never changes; extra principal just drains
+    `outstanding_principal` faster than the original plan, so the loan
+    finishes ahead of `term_months` on its own rather than lowering future
+    installments. `loans.outstanding_principal` (not the persisted schedule)
+    is always the live source of truth for what's actually owed.
+  - New `loan.loans` / `loan.loan_installments` / `loan.loan_payments`
+    tables (own schema, per `AGENTS.md`); `loan_installments` FKs to
+    `loan.loans` (same-schema FK is fine), `customer_id`/
+    `disbursement_account_id` are soft references (no cross-schema FK)
+- [x] Added `LOAN_RECEIVABLE` (one per loan) and `INTEREST_INCOME`
+      (singleton, analogous to `FEE_INCOME`) to `LedgerAccountType` - resolved
+      the design call deferred from M6.1 by adding a nullable `loan_id`
+      column to `ledger_accounts` (mirroring `account_id`) plus a partial
+      unique index and a `CHECK (account_id IS NULL OR loan_id IS NULL)`
+      constraint
+  - Found and fixed a real bug during this pass:
+    `idx_ledger_accounts_singleton_type` was `UNIQUE (type) WHERE account_id
+    IS NULL` - once `loan_id` existed, every `LOAN_RECEIVABLE` row also has
+    `account_id IS NULL`, so the *second* loan ever originated hit a
+    duplicate-key error against the *first* loan's receivable row, as if
+    `LOAN_RECEIVABLE` were a singleton type. Caught by the integration tests
+    (any test creating two loans), not by manual testing. Fixed with a new
+    changeset (`ledger-0006-...`, never edit an already-applied changeset)
+    narrowing the partial index to `WHERE account_id IS NULL AND loan_id IS
+    NULL`.
+- [x] `LoanService.originate/disburse/repay` — disbursement: Debit
       `LOAN_RECEIVABLE`, Credit customer's checking account; each repayment
       splits principal vs. interest income, one `@Transactional` posting per
       payment
-- [ ] REST: `POST /api/loans`, `GET /api/accounts/{id}/loans`,
+  - `repay(loanId, amount)` classifies the payment as `NORMAL` (amount ≤ the
+    regular installment), `EARLY_PARTIAL` (more than the installment but
+    less than a full payoff - extra goes straight to principal), or
+    `EARLY_PAYOFF` (amount covers `outstandingPrincipal + interestDue` -
+    caps the actual charge at exactly that, ignores any excess, and closes
+    the loan). Interest due is always computed live off the loan's *current*
+    `outstanding_principal`, not the persisted plan, so it stays correct
+    after a prior prepayment.
+  - Repaying a loan requires interest on top of principal, so a
+    disbursement-account balance that's exactly the disbursed principal is
+    *not* enough to fully service the loan to term - by design (a real
+    borrower needs income beyond the loan itself to pay interest). This is
+    exactly the gap `M6.6`'s `BorrowerAgent` (paired with income from
+    something like `SalaryAgent`) needs to close; it's not a bug.
+- [x] REST: `POST /api/loans`, `GET /api/accounts/{id}/loans`,
       `GET /api/loans/{id}`
-- [ ] Verify: loan disbursement/repayment keeps trial balance at zero;
-      amortization schedule matches a hand-computed example
+  - Also added `POST /api/loans/{id}/repay` (body: `{amount}`) - not in the
+    original bullet above, but needed to manually verify
+    normal/partial/full-payoff repayment behavior before `BorrowerAgent`
+    exists in M6.6, same rationale M5 used when it added ledger REST beyond
+    what was originally listed
+- [x] Verify: loan disbursement/repayment keeps trial balance at zero;
+      amortization schedule matches a hand-computed example — confirmed via
+      `LoanServiceTest` (Testcontainers Postgres): origination's persisted
+      schedule fully amortizes to zero and its principal portions sum back
+      to the original principal; disbursement and every repayment scenario
+      (normal, partial-early-payoff-then-payoff, full-early-payoff, and a
+      complete 6-installment origination→repayments→payoff sequence) keep
+      `LedgerReconciliationService.trialBalance().isBalanced()` true
+      throughout; a `repay()` call on an already-`PAID_OFF` loan throws
 
 ### M6.4 — TreasuryService ratios
 - [ ] `TreasuryService` — recomputes simplified ratios from aggregate ledger
