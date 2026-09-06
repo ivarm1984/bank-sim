@@ -2,8 +2,9 @@ databaseChangeLog:
   - changeSet:
       id: interest-data-0001-seed-rate-policies
       author: ivarm1984
-      # Illustrative flat rates for now - M6 (treasury) replaces these with
-      # rates derived from the simulated central bank policy rate + spread.
+      # Illustrative flat rates for now. M6.2 added a queryable central bank
+      # policy rate (centralbank package) but deliberately left these flat -
+      # rewiring them to base-rate + spread is deferred (see TODO.md M6.2).
       changes:
         - insert:
             schemaName: interest

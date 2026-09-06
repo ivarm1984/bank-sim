@@ -27,6 +27,11 @@ public class SimulationClock {
         return state.get();
     }
 
+    /** The fixed simulated date the clock starts (and resets) to — the epoch other modules anchor date arithmetic to. */
+    public static LocalDate epoch() {
+        return INITIAL_TIME.toLocalDate();
+    }
+
     public ClockSnapshot play() {
         return state.updateAndGet(s -> new ClockSnapshot(s.simulatedTime(), true, s.speed()));
     }

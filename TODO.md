@@ -179,13 +179,43 @@ already decided vs. still open.
       `BANK_CAPITAL` credit 1,000,000.00) and `GET /api/ledger/trial-balance`
       (`balanced: true`)
 
-### M6.2 — Central bank counterparty
-- [ ] Simulated **central bank counterparty**: policy rate (ECB main
-      refinancing rate analog), deposit facility rate (paid on excess
-      reserves), marginal lending rate (charged when the bank borrows to
-      cover a shortfall) — this is the base rate loan/deposit pricing builds on
-- [ ] Verify: rate(s) queryable and stable/deterministic given the sim clock;
-      documented how/whether they move over simulated time
+### M6.2 — Central bank counterparty ✅ done
+- [x] New flat `centralbank` package (no schema — rates are computed, not
+      persisted, mirroring how `treasury` started flat in M6.1): policy rate
+      (ECB main refinancing rate analog), deposit facility rate (paid on
+      excess reserves, policy − 25bps), marginal lending rate (charged when
+      the bank borrows to cover a shortfall, policy + 25bps) — this is the
+      base rate loan/deposit pricing builds on
+  - Design calls made via `AskUserQuestion`: (1) new package rather than
+    folding into `treasury`; (2) rates **drift deterministically** over
+    simulated time rather than staying static — see below; (3) the existing
+    `interest.rate_policies` flat rates (checking/savings/term-deposit) are
+    **deliberately left unrewired to the new base rate for now** — M6.2's own
+    scope was just making the central bank counterparty exist and be
+    queryable, and wiring consumers (savings-rate policy, and M6.3's loan
+    pricing `rate = base + risk spread`) is separate follow-up work once
+    there's more than one consumer to design the spread convention around
+  - Drift design: `CentralBankRateSchedule` reviews the policy rate every 42
+    simulated days (an ECB Governing Council meets roughly every six weeks),
+    starting from `SimulationClock.epoch()`. Each review holds/cuts/hikes by
+    25bps (20%/60%/20%), clamped to [0%, 7.5%]. Deliberately not reactive to
+    simulated events yet (loan volume, deposit runs, ...) — real feedback is
+    future work (M6.5's throttle/borrow loop, or the CEO-mode rate-shock
+    `EventInjector`)
+  - Found and fixed a real bug during this pass: the first design re-seeded a
+    fresh `java.util.Random` per review index (`SEED + reviewIndex`), which
+    looked deterministic and stayed in-bounds but is a real trap — Random's
+    first draw from consecutive seeds is strongly correlated, so every review
+    silently landed in the "hold" bucket and the rate sat flat at 3.00% for
+    15+ simulated years. Caught by a test asserting the rate actually moves
+    over a long horizon (not just that it stays in bounds), not by manual
+    testing. Fixed by advancing one shared, sequentially-seeded `Random`
+    across the whole replay instead of reseeding per review.
+  - REST: `GET /api/central-bank/rates`
+- [x] Verify: confirmed live via `GET /api/central-bank/rates` — deterministic
+      at the epoch date (3.00% / 2.75% / 3.25%), genuinely wanders both up and
+      down over a 16-simulated-year run (3.25% → 5.00% → 3.75% → 2.25% →
+      3.25%), and a `clock/reset` reproduces the exact epoch-date rates again
 
 ### M6.3 — Loan package + origination/repayment
 - [ ] `loan` package + schema: `LoanAccount` (principal, term, rate = base +
