@@ -4,6 +4,7 @@ import static io.github.ivarm1984.banksim.jooq.account.tables.Accounts.ACCOUNTS;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 
 import org.jooq.DSLContext;
@@ -106,6 +107,30 @@ public class AccountRepository {
             throw new NoSuchElementException("No account with id " + id);
         }
         return newBalance.getCurrentBalance();
+    }
+
+    /**
+     * Bulk version of {@link #adjustBalance(long, BigDecimal)} - applies every delta as
+     * one JDBC batch (one query shape, many bind sets) instead of one round trip per
+     * account. Deliberately skips {@link #lockForUpdate(long)}: each delta is an atomic
+     * {@code current_balance = current_balance + delta} increment at the database level,
+     * so it's correct regardless of concurrent writers to the same row - unlike
+     * {@link #adjustBalance(long, BigDecimal)}'s callers, which pre-lock because they
+     * also need to *read* the balance first to reject a would-go-negative posting. Callers
+     * of this method must not depend on that read-then-decide behavior.
+     */
+    public void adjustBalancesBatch(Map<Long, BigDecimal> deltasByAccountId) {
+        if (deltasByAccountId.isEmpty()) {
+            return;
+        }
+        var template = dsl.update(ACCOUNTS)
+                .set(ACCOUNTS.CURRENT_BALANCE, ACCOUNTS.CURRENT_BALANCE.add((BigDecimal) null))
+                .where(ACCOUNTS.ID.eq((Long) null));
+        var batch = dsl.batch(template);
+        for (Map.Entry<Long, BigDecimal> entry : deltasByAccountId.entrySet()) {
+            batch.bind(entry.getValue(), entry.getKey());
+        }
+        batch.execute();
     }
 
     private static Account toAccount(io.github.ivarm1984.banksim.jooq.account.tables.records.AccountsRecord record) {

@@ -8,6 +8,7 @@ import static org.jooq.impl.DSL.sum;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 
 import org.jooq.DSLContext;
@@ -69,6 +70,22 @@ public class LedgerAccountService {
             throw new NoSuchElementException("No customer liability ledger account for account " + accountId);
         }
         return toLedgerAccount(record);
+    }
+
+    /**
+     * Bulk version of {@link #findCustomerLiabilityAccount(long)} - one query for many
+     * accounts, keyed by account id, for batch ledger postings (see
+     * {@code InterestAccrualService}).
+     */
+    public Map<Long, Long> findCustomerLiabilityAccountIdsByAccountIds(List<Long> accountIds) {
+        if (accountIds.isEmpty()) {
+            return Map.of();
+        }
+        return dsl.select(LEDGER_ACCOUNTS.ACCOUNT_ID, LEDGER_ACCOUNTS.ID)
+                .from(LEDGER_ACCOUNTS)
+                .where(LEDGER_ACCOUNTS.ACCOUNT_ID.in(accountIds))
+                .and(LEDGER_ACCOUNTS.TYPE.eq(LedgerAccountType.CUSTOMER_LIABILITY.name()))
+                .fetchMap(LEDGER_ACCOUNTS.ACCOUNT_ID, LEDGER_ACCOUNTS.ID);
     }
 
     /** Creates the one LOAN_RECEIVABLE ledger account for a newly disbursed Loan. */

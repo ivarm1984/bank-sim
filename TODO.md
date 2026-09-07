@@ -502,17 +502,66 @@ already decided vs. still open.
 ---
 
 ## Later phases (not started yet)
-- [ ] Batch the EOD interest-accrual/statement-generation jobs. Found during
+- [x] Batch the EOD interest-accrual/statement-generation jobs. Found during
       M6.6's 10,000-customer seeding: `InterestAccrualService` and
-      `StatementGenerationService` each do one `@Transactional`
+      `StatementGenerationService` each did one `@Transactional`
       accrual/statement per account per simulated day - fine at a handful of
-      demo accounts, but at 20,000 accounts one simulated day takes ~3-4
-      minutes of real time with the clock running, making the simulation
-      impractical to actually play forward at that scale (seeding itself is
-      fine - this is specifically the daily batch). Needs a batched
-      accrual/statement path (e.g. one multi-row `UPDATE`/`INSERT` per day
-      instead of one transaction per account) analogous to the batch-insert
-      seeding work M6.6 added for `CustomerService`/`AccountService`.
+      demo accounts, but at 20,000 accounts one simulated day took ~3-4
+      minutes of real time with the clock running.
+  - Design calls made via `AskUserQuestion`: (1) chunks of 200 accounts per
+    transaction (the user's own suggestion over one mega-transaction for the
+    whole day, or reusing the 1,000-row seeding chunk size) - bounded
+    transaction/lock duration, and a failing chunk only rolls back its own
+    200 accounts, not the whole day; (2) a new bulk-specific ledger-posting
+    path, `LedgerService.postBulkAccountCredits`, deliberately bypassing
+    `post(JournalEntryRequest)`'s generic per-line lookup/lock loop - `post()`
+    is itself O(lines) round trips even inside one transaction, so routing
+    200 lines/chunk through it wouldn't have removed the bottleneck. One
+    journal entry per chunk (1 debit line for the chunk's total interest
+    expense + one credit line per accruing account) is safe without
+    `post()`'s per-row `FOR UPDATE` locking/negative-balance guard: a credit
+    can never drive a liability negative, and the EOD batch is provably
+    single-threaded relative to agent activity (`ClockService.tick()`
+    publishes `ClockTickedEvent` - agents run synchronously - before
+    `DayRolledOverEvent`, in the same call).
+  - New `AccountRepository.adjustBalancesBatch` (one JDBC batch of
+    `current_balance = current_balance + delta` updates - safe without
+    pre-locking since each is an atomic per-row increment, correct regardless
+    of a concurrent REST deposit/withdrawal racing the same row),
+    `LedgerAccountService.findCustomerLiabilityAccountIdsByAccountIds`,
+    `InterestRatePolicyRepository.findAllRates`,
+    `InterestAccrualRepository.insertBatch`,
+    `StatementRepository.insertBatch`/`findMostRecentClosingBalances` (bulk
+    `DISTINCT ON` query) - all one-query-for-the-whole-chunk versions of the
+    existing one-row lookups, mirroring the batch-insert pattern M6.6 already
+    established for seeding.
+  - `InterestAccrualService.accrueForAccount`/
+    `StatementGenerationService.generateForAccount` (single-account) are kept
+    alongside the new `accrueForChunk`/`generateForChunk` (bulk) - still
+    directly unit-tested for the accrual/statement formulas in isolation from
+    the bulk SQL mechanics, even though only the chunked path is used in
+    production now.
+  - `InterestAccrualScheduler`/`StatementGenerationScheduler` now partition
+    `accountService.findAll()` into 200-account chunks (same private
+    `partition` helper `DataSeeder` already used for its batch-insert
+    chunking) and isolate each chunk's `@Transactional` call in its own
+    try/catch, same spirit as the old per-account isolation but at chunk
+    granularity.
+  - Verify: `./gradlew test` (Testcontainers Postgres) - new
+    `LedgerServiceTest`/`InterestAccrualServiceTest`/
+    `StatementGenerationServiceTest` cases cover the bulk path directly (a
+    chunk with a mix of accruing/non-accruing accounts shares one journal
+    entry and keeps the ledger balanced; an all-zero chunk posts no journal
+    entry but still records every accrual; a chunk mixing a brand-new account
+    with one that already has statement history gets the right opening
+    balance for each). Live: reset the dev DB (`docker compose down -v` +
+    `up -d`), booted the app fresh (10,000 customers/20,000 accounts
+    reseeded), and called `POST /api/clock/step-day` repeatedly - first call
+    49s (cold JIT/connection-pool/buffer-cache), subsequent calls 5-15s, down
+    from the previous ~180-240s/day; `GET /api/ledger/trial-balance` stayed
+    balanced and `GET /api/treasury/ratios` recomputed correctly across every
+    day, with exactly 20,000 accrual rows and 20,000 statement rows written
+    per simulated day in Postgres.
 - [ ] Extract `interest`/`statement` (or others) into real separate services
 - [ ] Swap `DomainEventPublisher` for a Kafka/RabbitMQ/NATS producer
 - [ ] Observability: Micrometer + Prometheus + Grafana

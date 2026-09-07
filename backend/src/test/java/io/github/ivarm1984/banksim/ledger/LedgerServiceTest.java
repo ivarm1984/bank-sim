@@ -110,6 +110,36 @@ class LedgerServiceTest extends PostgresIntegrationTest {
         assertThat(reconciliationService.reconcile(account.id()).isConsistent()).isTrue();
     }
 
+    @Test
+    void bulkAccountCreditsShareOneJournalEntryAndKeepLedgerBalanced() {
+        Account accountA = openAccount();
+        Account accountB = openAccount();
+        long interestExpenseId = ledgerAccountService.getSingleton(LedgerAccountType.INTEREST_EXPENSE).id();
+
+        long journalEntryId = ledgerService.postBulkAccountCredits(
+                "Interest accrual batch",
+                interestExpenseId,
+                List.of(
+                        new LedgerService.AccountCredit(accountA.id(), customerLiabilityLedgerAccountId(accountA.id()), new BigDecimal("1.23")),
+                        new LedgerService.AccountCredit(accountB.id(), customerLiabilityLedgerAccountId(accountB.id()), new BigDecimal("4.56"))));
+
+        assertThat(accountService.balanceOf(accountA.id())).isEqualByComparingTo("1.23");
+        assertThat(accountService.balanceOf(accountB.id())).isEqualByComparingTo("4.56");
+        assertThat(trialBalance()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(dsl.selectCount().from(LEDGER_LINES).where(LEDGER_LINES.JOURNAL_ENTRY_ID.eq(journalEntryId)).fetchOne(0, Integer.class))
+                .isEqualTo(3); // 1 debit (total) + 2 credits
+        assertThat(reconciliationService.reconcile(accountA.id()).isConsistent()).isTrue();
+        assertThat(reconciliationService.reconcile(accountB.id()).isConsistent()).isTrue();
+    }
+
+    @Test
+    void bulkAccountCreditsRejectsEmptyCreditsList() {
+        long interestExpenseId = ledgerAccountService.getSingleton(LedgerAccountType.INTEREST_EXPENSE).id();
+
+        assertThatThrownBy(() -> ledgerService.postBulkAccountCredits("Empty batch", interestExpenseId, List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private long customerLiabilityLedgerAccountId(long accountId) {
         return dsl.select(LEDGER_ACCOUNTS.ID)
                 .from(LEDGER_ACCOUNTS)

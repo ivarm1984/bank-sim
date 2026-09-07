@@ -3,10 +3,12 @@ package io.github.ivarm1984.banksim.statement;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
 
 /**
@@ -41,6 +43,25 @@ public class StatementGenerationService {
                 .map(Statement::closingBalance)
                 .orElse(closingBalance);
         return statementRepository.insert(accountId, date, openingBalance, closingBalance);
+    }
+
+    /**
+     * Bulk version of {@link #generateForAccount} for a chunk of accounts (see
+     * {@code StatementGenerationScheduler}): looks up every account's most recent prior
+     * statement in one query and writes every new statement in one multi-row INSERT.
+     * {@code accounts}' balances must already reflect the day's interest accrual (true
+     * when chained off {@code InterestAccrualBatchCompletedEvent}, which only fires
+     * after that batch commits).
+     */
+    @Transactional
+    public List<Statement> generateForChunk(List<Account> accounts, LocalDate date) {
+        Map<Long, BigDecimal> mostRecentClosing = statementRepository.findMostRecentClosingBalances(
+                accounts.stream().map(Account::id).toList());
+        List<StatementRepository.NewStatement> toInsert = accounts.stream()
+                .map(account -> new StatementRepository.NewStatement(
+                        account.id(), date, mostRecentClosing.getOrDefault(account.id(), account.currentBalance()), account.currentBalance()))
+                .toList();
+        return statementRepository.insertBatch(toInsert);
     }
 
     public List<Statement> findByAccountId(long accountId) {

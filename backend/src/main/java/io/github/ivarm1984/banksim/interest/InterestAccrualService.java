@@ -3,13 +3,16 @@ package io.github.ivarm1984.banksim.interest;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
+import io.github.ivarm1984.banksim.account.AccountType;
 import io.github.ivarm1984.banksim.ledger.EntryType;
 import io.github.ivarm1984.banksim.ledger.JournalEntryRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
@@ -56,10 +59,7 @@ public class InterestAccrualService {
     public InterestAccrual accrueForAccount(long accountId, LocalDate date) {
         Account account = accountService.findById(accountId);
         BigDecimal annualRate = ratePolicyRepository.findAnnualRate(account.accountType());
-        BigDecimal amount = account.currentBalance()
-                .multiply(annualRate)
-                .divide(DAYS_PER_YEAR, 10, RoundingMode.HALF_UP)
-                .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal amount = accrualAmount(account.currentBalance(), annualRate);
 
         Long journalEntryId = null;
         if (amount.signum() > 0) {
@@ -75,7 +75,60 @@ public class InterestAccrualService {
         return interestAccrualRepository.insert(accountId, date, account.currentBalance(), annualRate, amount, journalEntryId);
     }
 
+    /**
+     * Bulk version of {@link #accrueForAccount(long, LocalDate)} for a chunk of accounts
+     * (see {@code InterestAccrualScheduler}): computes every account's amount off the
+     * balance already loaded on {@code accounts} (no per-account re-read), posts at most
+     * one shared journal entry for the whole chunk via
+     * {@link LedgerService#postBulkAccountCredits}, and writes every accrual row (posted
+     * or zero) in one multi-row INSERT.
+     */
+    @Transactional
+    public List<InterestAccrual> accrueForChunk(List<Account> accounts, Map<AccountType, BigDecimal> ratesByType, LocalDate date) {
+        record Computed(long accountId, BigDecimal principalBalance, BigDecimal annualRate, BigDecimal amount) {}
+
+        List<Computed> computed = accounts.stream()
+                .map(account -> {
+                    BigDecimal annualRate = ratesByType.get(account.accountType());
+                    return new Computed(account.id(), account.currentBalance(), annualRate, accrualAmount(account.currentBalance(), annualRate));
+                })
+                .toList();
+
+        List<Computed> accruing = computed.stream().filter(c -> c.amount().signum() > 0).toList();
+        Map<Long, Long> journalEntryIdByAccount = new HashMap<>();
+        if (!accruing.isEmpty()) {
+            Map<Long, Long> liabilityLedgerAccountIds = ledgerAccountService.findCustomerLiabilityAccountIdsByAccountIds(
+                    accruing.stream().map(Computed::accountId).toList());
+            long interestExpenseId = ledgerAccountService.getSingleton(LedgerAccountType.INTEREST_EXPENSE).id();
+            List<LedgerService.AccountCredit> credits = accruing.stream()
+                    .map(c -> new LedgerService.AccountCredit(c.accountId(), liabilityLedgerAccountIds.get(c.accountId()), c.amount()))
+                    .toList();
+            long journalEntryId = ledgerService.postBulkAccountCredits(
+                    "Interest accrual batch for " + date, interestExpenseId, credits);
+            accruing.forEach(c -> journalEntryIdByAccount.put(c.accountId(), journalEntryId));
+        }
+
+        List<InterestAccrualRepository.NewAccrual> toInsert = computed.stream()
+                .map(c -> new InterestAccrualRepository.NewAccrual(
+                        c.accountId(), date, c.principalBalance(), c.annualRate(), c.amount(),
+                        journalEntryIdByAccount.get(c.accountId())))
+                .toList();
+        return interestAccrualRepository.insertBatch(toInsert);
+    }
+
+    private static BigDecimal accrualAmount(BigDecimal balance, BigDecimal annualRate) {
+        return balance
+                .multiply(annualRate)
+                .divide(DAYS_PER_YEAR, 10, RoundingMode.HALF_UP)
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
     public List<InterestAccrual> findByAccountId(long accountId) {
         return interestAccrualRepository.findByAccountId(accountId);
+    }
+
+    /** Every seeded account-type rate, for {@link #accrueForChunk} - fetched once per batch, not once per chunk. */
+    public Map<AccountType, BigDecimal> currentRates() {
+        return ratePolicyRepository.findAllRates();
     }
 }

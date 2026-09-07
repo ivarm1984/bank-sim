@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -54,5 +55,26 @@ class StatementGenerationServiceTest extends PostgresIntegrationTest {
 
         assertThat(day2.openingBalance()).isEqualByComparingTo(day1.closingBalance());
         assertThat(day2.closingBalance()).isEqualByComparingTo("150.00");
+    }
+
+    @Test
+    void chunkedGenerationHandlesFirstAndSubsequentStatementsAcrossAccountsInOneCall() {
+        Account withHistory = openAccount();
+        transactionService.deposit(withHistory.id(), new BigDecimal("100.00"));
+        statementGenerationService.generateForAccount(withHistory.id(), LocalDate.of(2026, 1, 1));
+        transactionService.deposit(withHistory.id(), new BigDecimal("50.00"));
+        Account brandNew = openAccount();
+        transactionService.deposit(brandNew.id(), new BigDecimal("25.00"));
+
+        List<Statement> statements = statementGenerationService.generateForChunk(
+                List.of(accountService.findById(withHistory.id()), accountService.findById(brandNew.id())),
+                LocalDate.of(2026, 1, 2));
+
+        Statement withHistoryStatement = statements.stream().filter(s -> s.accountId().equals(withHistory.id())).findFirst().orElseThrow();
+        Statement brandNewStatement = statements.stream().filter(s -> s.accountId().equals(brandNew.id())).findFirst().orElseThrow();
+        assertThat(withHistoryStatement.openingBalance()).isEqualByComparingTo("100.00");
+        assertThat(withHistoryStatement.closingBalance()).isEqualByComparingTo("150.00");
+        assertThat(brandNewStatement.openingBalance()).isEqualByComparingTo("25.00");
+        assertThat(brandNewStatement.closingBalance()).isEqualByComparingTo("25.00");
     }
 }

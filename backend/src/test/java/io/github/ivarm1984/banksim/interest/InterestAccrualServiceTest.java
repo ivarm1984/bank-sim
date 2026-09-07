@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -77,5 +78,53 @@ class InterestAccrualServiceTest extends PostgresIntegrationTest {
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> interestAccrualService.accrueForAccount(account.id(), date))
                 .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void chunkedAccrualSharesOneJournalEntryAcrossAccountsAndKeepsLedgerBalanced() {
+        Account savings = openAccount(AccountType.SAVINGS);
+        transactionService.deposit(savings.id(), new BigDecimal("10000.00"));
+        Account checking = openAccount(AccountType.CHECKING); // 0% seeded rate - no ledger line for this one
+        transactionService.deposit(checking.id(), new BigDecimal("500.00"));
+        LocalDate date = LocalDate.of(2026, 1, 1);
+        BigDecimal savingsRate = new BigDecimal("0.0150");
+        BigDecimal expectedSavingsAmount = new BigDecimal("10000.00")
+                .multiply(savingsRate)
+                .divide(new BigDecimal("365"), 10, RoundingMode.HALF_UP)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        List<InterestAccrual> accruals = interestAccrualService.accrueForChunk(
+                List.of(accountService.findById(savings.id()), accountService.findById(checking.id())),
+                interestAccrualService.currentRates(),
+                date);
+
+        InterestAccrual savingsAccrual = accruals.stream().filter(a -> a.accountId().equals(savings.id())).findFirst().orElseThrow();
+        InterestAccrual checkingAccrual = accruals.stream().filter(a -> a.accountId().equals(checking.id())).findFirst().orElseThrow();
+        assertThat(savingsAccrual.amount()).isEqualByComparingTo(expectedSavingsAmount);
+        assertThat(savingsAccrual.journalEntryId()).isNotNull();
+        assertThat(checkingAccrual.amount()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(checkingAccrual.journalEntryId()).isNull();
+        assertThat(accountService.balanceOf(savings.id())).isEqualByComparingTo(new BigDecimal("10000.00").add(expectedSavingsAmount));
+        assertThat(accountService.balanceOf(checking.id())).isEqualByComparingTo("500.00");
+        assertThat(reconciliationService.reconcile(savings.id()).isConsistent()).isTrue();
+        assertThat(reconciliationService.reconcile(checking.id()).isConsistent()).isTrue();
+    }
+
+    @Test
+    void chunkedAccrualWithNoAccruingAccountsPostsNoJournalEntryButStillRecordsAccruals() {
+        Account checkingA = openAccount(AccountType.CHECKING);
+        Account checkingB = openAccount(AccountType.CHECKING);
+        LocalDate date = LocalDate.of(2026, 1, 1);
+
+        List<InterestAccrual> accruals = interestAccrualService.accrueForChunk(
+                List.of(accountService.findById(checkingA.id()), accountService.findById(checkingB.id())),
+                interestAccrualService.currentRates(),
+                date);
+
+        assertThat(accruals).hasSize(2);
+        assertThat(accruals).allSatisfy(a -> {
+            assertThat(a.amount()).isEqualByComparingTo(BigDecimal.ZERO);
+            assertThat(a.journalEntryId()).isNull();
+        });
     }
 }

@@ -8,10 +8,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import org.jooq.DSLContext;
+import org.jooq.InsertValuesStep4;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import io.github.ivarm1984.banksim.jooq.ledger.tables.records.LedgerLinesRecord;
 
 import io.github.ivarm1984.banksim.account.AccountRepository;
 
@@ -100,6 +104,50 @@ public class LedgerService {
         for (AffectedAccount account : affected) {
             accountRepository.adjustBalance(account.accountId(), account.delta());
         }
+
+        return journalEntryId;
+    }
+
+    /** One account's share of a {@link #postBulkAccountCredits} posting. */
+    public record AccountCredit(long accountId, long ledgerAccountId, BigDecimal amount) {}
+
+    /**
+     * Posts one journal entry crediting many customer liability accounts at once - one
+     * debit line for the total, one credit line per account - and bulk-updates their
+     * cached balances via {@link io.github.ivarm1984.banksim.account.AccountRepository#adjustBalancesBatch}.
+     *
+     * <p>A deliberate bypass of {@link #post(JournalEntryRequest)}'s per-line
+     * lookup/lock loop, which is itself O(lines) round trips even inside one
+     * transaction - unusable at the account counts a daily batch job (see
+     * {@code InterestAccrualScheduler}) needs to process. Safe only because every line
+     * here is a known CUSTOMER_LIABILITY credit (a credit can never drive a liability
+     * negative, so {@code post()}'s negative-balance guard doesn't apply) and the
+     * caller guarantees no concurrent writer can race the whole batch.
+     */
+    @Transactional
+    public long postBulkAccountCredits(String description, long debitLedgerAccountId, List<AccountCredit> credits) {
+        if (credits.isEmpty()) {
+            throw new IllegalArgumentException("credits must not be empty");
+        }
+        BigDecimal total = credits.stream().map(AccountCredit::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        long journalEntryId = dsl.insertInto(JOURNAL_ENTRIES)
+                .set(JOURNAL_ENTRIES.DESCRIPTION, description)
+                .returning(JOURNAL_ENTRIES.ID)
+                .fetchOne()
+                .getId();
+
+        InsertValuesStep4<LedgerLinesRecord, Long, Long, String, BigDecimal> insert = dsl.insertInto(
+                        LEDGER_LINES, LEDGER_LINES.JOURNAL_ENTRY_ID, LEDGER_LINES.LEDGER_ACCOUNT_ID,
+                        LEDGER_LINES.ENTRY_TYPE, LEDGER_LINES.AMOUNT)
+                .values(journalEntryId, debitLedgerAccountId, EntryType.DEBIT.name(), total);
+        for (AccountCredit credit : credits) {
+            insert = insert.values(journalEntryId, credit.ledgerAccountId(), EntryType.CREDIT.name(), credit.amount());
+        }
+        insert.execute();
+
+        accountRepository.adjustBalancesBatch(
+                credits.stream().collect(Collectors.toMap(AccountCredit::accountId, AccountCredit::amount)));
 
         return journalEntryId;
     }

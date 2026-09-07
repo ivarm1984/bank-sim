@@ -7,7 +7,10 @@ import java.time.LocalDate;
 import java.util.List;
 
 import org.jooq.DSLContext;
+import org.jooq.InsertValuesStep6;
 import org.springframework.stereotype.Repository;
+
+import io.github.ivarm1984.banksim.jooq.interest.tables.records.InterestAccrualsRecord;
 
 @Repository
 public class InterestAccrualRepository {
@@ -31,6 +34,29 @@ public class InterestAccrualRepository {
                 .returning()
                 .fetchOne();
         return toInterestAccrual(record);
+    }
+
+    /** One accrual row to write, for {@link #insertBatch}. */
+    public record NewAccrual(
+            long accountId, LocalDate accrualDate, BigDecimal principalBalance, BigDecimal annualRate,
+            BigDecimal amount, Long journalEntryId) {}
+
+    /** Bulk version of {@link #insert} - one multi-row INSERT for a whole chunk of accounts. */
+    public List<InterestAccrual> insertBatch(List<NewAccrual> accruals) {
+        if (accruals.isEmpty()) {
+            return List.of();
+        }
+        InsertValuesStep6<InterestAccrualsRecord, Long, LocalDate, BigDecimal, BigDecimal, BigDecimal, Long> insert =
+                dsl.insertInto(
+                        INTEREST_ACCRUALS, INTEREST_ACCRUALS.ACCOUNT_ID, INTEREST_ACCRUALS.ACCRUAL_DATE,
+                        INTEREST_ACCRUALS.PRINCIPAL_BALANCE, INTEREST_ACCRUALS.ANNUAL_RATE, INTEREST_ACCRUALS.AMOUNT,
+                        INTEREST_ACCRUALS.JOURNAL_ENTRY_ID);
+        for (NewAccrual accrual : accruals) {
+            insert = insert.values(
+                    accrual.accountId(), accrual.accrualDate(), accrual.principalBalance(), accrual.annualRate(),
+                    accrual.amount(), accrual.journalEntryId());
+        }
+        return insert.returning().fetch().map(InterestAccrualRepository::toInterestAccrual);
     }
 
     public List<InterestAccrual> findByAccountId(long accountId) {
