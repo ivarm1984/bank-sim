@@ -574,11 +574,73 @@ A game layer on top of Treasury (M6): you set policy periodically, agents react
 autonomously, and regulatory ratios drive win/lose — not something to build until
 Treasury/Loans exist to control. Separate milestone once M6 is done.
 
-- [ ] Policy levers (REST-exposed, like the clock controls): savings rate, loan
+Split into sub-milestones the same way M6 was, each intended as its own
+session: CEO.1 (below) → CEO.2 (`BankHealthService` + win condition) → CEO.3
+(`EventInjector`) → CEO.4 (frontend CEO control panel + bank-health view).
+
+### CEO.1 — Policy levers ✅ done
+- [x] Policy levers (REST-exposed, like the clock controls): savings rate, loan
       spread, underwriting looseness (risk appetite), target capital buffer vs.
       how much to lend out, whether to tap the central bank borrowing facility
       when short — agents (deposit/loan agents) react to these rather than you
       touching individual transactions
+  - New flat `policy` package (no schema — same precedent as `clock`/
+    `centralbank`): `PolicyLevers` (`@Component`, `AtomicReference<PolicyLeversSnapshot>`,
+    modeled directly on `clock.SimulationClock`) + `GET/POST /api/policy-levers`
+    (`PolicyLeversController`, full-replace body via `PolicyLeversRequest`,
+    mirroring `ClockController`'s `SpeedRequest` pattern). Pure in-memory
+    state, no Liquibase changeset needed.
+  - Design calls made via `AskUserQuestion`: (1) the savings-rate lever
+    finally does the central-bank-rate rewiring M6.2 deliberately deferred —
+    `interest.rate_policies`' SAVINGS rate is now `centralBankService
+    .currentRates().policyRate().add(lever.savingsRateSpread())`
+    (CHECKING/TERM_DEPOSIT stay on the flat seeded DB rate); the default
+    spread (`-0.0150`) reproduces today's exact 1.50% day-1 rate since the
+    epoch policy rate is 3.00%, but the lever gains real leverage as the
+    policy rate drifts over simulated time; (2) mortgage/consumer loan
+    spreads are two independent additive levers over
+    `LoanService.MORTGAGE_RISK_SPREAD`/`CONSUMER_RISK_SPREAD`, not one shared
+    delta; (3) `targetCapitalBuffer` and `underwritingLooseness` stay
+    conceptually separate — the buffer is wired into
+    `TreasuryService.isCapitalBreach` (shifts both the CAR-minimum and
+    NSFR-minimum throttle thresholds up by the same amount; 0 reproduces
+    today's unshifted 8%/100% minimums), while `underwritingLooseness` is a
+    real field on `PolicyLeversSnapshot`/the REST contract that is
+    **deliberately not consumed anywhere yet** — there's no credit-scoring
+    system in this codebase for it to act on (see "Complex additions" —
+    "Credit risk pricing" below); it's a placeholder for that future work.
+  - `autoTapBorrowingFacility` (boolean, default `true` = today's behavior):
+    `TreasuryService.applyFeedback()` skips the auto-borrow entirely when
+    false — a liquidity breach (LCR/reserve-coverage) just persists
+    untreated into tomorrow's snapshot instead of being auto-corrected,
+    same "as-detected, corrected later" spirit the method already used for
+    the no-breach/repay case.
+  - `AgentContext`/agents needed **no changes** — every lever's effect is
+    centralized in `LoanService`/`InterestAccrualService`/`TreasuryService`,
+    so any loan/interest an agent triggers automatically picks up the
+    current lever state through the services it already calls.
+  - Verify: `./gradlew test` — new `PolicyLeversTest` (plain unit, no
+    Spring/Postgres, modeled on `SimulationClockTest`) plus new lever-effect
+    cases in `LoanServiceTest`/`TreasuryServiceTest`/
+    `InterestAccrualServiceTest` (each restoring the default snapshot in a
+    `finally` — `PolicyLevers` is a shared Spring singleton across the whole
+    Testcontainers-backed suite, same hygiene `TreasuryServiceTest`'s
+    throttle test already required). Live (fresh dev DB): `GET
+    /api/policy-levers` returned the documented defaults; a SAVINGS
+    account's day-1 accrual rate was unchanged at 1.50%, then jumped to the
+    full 3.00% policy rate after raising `savingsRateSpread` to `0.00`
+    (CHECKING stayed at 0%); a mortgage/consumer loan's priced rate shifted
+    by exactly the lever adjustment (`4.50%→5.00%`, `12.00%→11.00%`); an
+    8,000,000-principal loan left CAR healthy (9.22%) at `targetCapitalBuffer
+    =0` but raising the buffer to `2%` (10% threshold) immediately throttled
+    origination (`400`) with no new snapshot needed; a 150,000,000-principal
+    loan forced a real LCR/reserve-coverage breach (`0.948083`/`0.562866`)
+    that left `CENTRAL_BANK_RESERVES`/`CENTRAL_BANK_BORROWINGS` completely
+    untouched with `autoTapBorrowingFacility=false`, then drew the facility
+    normally (reserves `1,000,000.00→1,919,975.73`) once flipped back on;
+    `GET /api/ledger/trial-balance` stayed balanced throughout.
+
+### CEO.2+ — not started
 - [ ] `BankHealthService`: state machine watching `TreasuryRatiosUpdatedEvent` —
       capital ratio below the CRR minimum for N consecutive days → regulator
       warning; a second breach → forced resolution (game over); liquidity

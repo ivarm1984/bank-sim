@@ -18,6 +18,7 @@ import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
 import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerService;
+import io.github.ivarm1984.banksim.policy.PolicyLevers;
 
 /**
  * Simplified, single-number versions of the EU treasury/liquidity ratios -
@@ -68,15 +69,17 @@ public class TreasuryService {
     private final LedgerService ledgerService;
     private final CentralBankService centralBankService;
     private final DomainEventPublisher events;
+    private final PolicyLevers policyLevers;
 
     public TreasuryService(
             LedgerAccountService ledgerAccountService, TreasuryRatioRepository repository, LedgerService ledgerService,
-            CentralBankService centralBankService, DomainEventPublisher events) {
+            CentralBankService centralBankService, DomainEventPublisher events, PolicyLevers policyLevers) {
         this.ledgerAccountService = ledgerAccountService;
         this.repository = repository;
         this.ledgerService = ledgerService;
         this.centralBankService = centralBankService;
         this.events = events;
+        this.policyLevers = policyLevers;
     }
 
     /** Recomputes every ratio from the current ledger totals and persists one snapshot row for {@code date}. */
@@ -118,7 +121,7 @@ public class TreasuryService {
      * any snapshot has ever been computed.
      */
     public boolean isLoanOriginationThrottled() {
-        return repository.findMostRecent().map(TreasuryService::isCapitalBreach).orElse(false);
+        return repository.findMostRecent().map(this::isCapitalBreach).orElse(false);
     }
 
     /**
@@ -144,10 +147,12 @@ public class TreasuryService {
         BigDecimal amountBorrowed = BigDecimal.ZERO;
         BigDecimal amountRepaid = BigDecimal.ZERO;
         if (hqlaHeadroom.signum() < 0 || reserveHeadroom.signum() < 0) {
-            amountBorrowed = hqlaHeadroom.negate().max(reserveHeadroom.negate()).max(BigDecimal.ZERO)
-                    .setScale(2, RoundingMode.HALF_UP);
-            if (amountBorrowed.signum() > 0) {
-                postCentralBankFacilityMovement("draw", amountBorrowed, EntryType.DEBIT, snapshot.snapshotDate());
+            if (policyLevers.state().autoTapBorrowingFacility()) {
+                amountBorrowed = hqlaHeadroom.negate().max(reserveHeadroom.negate()).max(BigDecimal.ZERO)
+                        .setScale(2, RoundingMode.HALF_UP);
+                if (amountBorrowed.signum() > 0) {
+                    postCentralBankFacilityMovement("draw", amountBorrowed, EntryType.DEBIT, snapshot.snapshotDate());
+                }
             }
         } else {
             BigDecimal outstanding = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
@@ -204,9 +209,18 @@ public class TreasuryService {
                         new LedgerLineRequest(borrowingsId, borrowingsSide, amount))));
     }
 
-    private static boolean isCapitalBreach(TreasuryRatioSnapshot snapshot) {
-        boolean nsfrBreach = snapshot.netStableFundingRatio() != null && snapshot.netStableFundingRatio().compareTo(BigDecimal.ONE) < 0;
-        boolean carBreach = snapshot.capitalAdequacyRatio() != null && snapshot.capitalAdequacyRatio().compareTo(CAR_MINIMUM) < 0;
+    /**
+     * NSFR/CAR breach against their EU minimums, each shifted up by the CEO's
+     * {@code targetCapitalBuffer} lever - 0 (the default) reproduces the
+     * unshifted regulatory minimums; a positive buffer throttles earlier,
+     * i.e. more conservative lending.
+     */
+    private boolean isCapitalBreach(TreasuryRatioSnapshot snapshot) {
+        BigDecimal buffer = policyLevers.state().targetCapitalBuffer();
+        BigDecimal nsfrThreshold = BigDecimal.ONE.add(buffer);
+        BigDecimal carThreshold = CAR_MINIMUM.add(buffer);
+        boolean nsfrBreach = snapshot.netStableFundingRatio() != null && snapshot.netStableFundingRatio().compareTo(nsfrThreshold) < 0;
+        boolean carBreach = snapshot.capitalAdequacyRatio() != null && snapshot.capitalAdequacyRatio().compareTo(carThreshold) < 0;
         return nsfrBreach || carBreach;
     }
 

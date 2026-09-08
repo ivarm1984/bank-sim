@@ -18,6 +18,7 @@ import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
 import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerService;
+import io.github.ivarm1984.banksim.policy.PolicyLevers;
 import io.github.ivarm1984.banksim.treasury.TreasuryService;
 
 /**
@@ -61,11 +62,12 @@ public class LoanService {
     private final ClockService clockService;
     private final DomainEventPublisher events;
     private final TreasuryService treasuryService;
+    private final PolicyLevers policyLevers;
 
     public LoanService(
             LoanRepository loanRepository, LedgerService ledgerService, LedgerAccountService ledgerAccountService,
             CentralBankService centralBankService, ClockService clockService, DomainEventPublisher events,
-            TreasuryService treasuryService) {
+            TreasuryService treasuryService, PolicyLevers policyLevers) {
         this.loanRepository = loanRepository;
         this.ledgerService = ledgerService;
         this.ledgerAccountService = ledgerAccountService;
@@ -73,6 +75,7 @@ public class LoanService {
         this.clockService = clockService;
         this.events = events;
         this.treasuryService = treasuryService;
+        this.policyLevers = policyLevers;
     }
 
     /**
@@ -96,7 +99,9 @@ public class LoanService {
             throw new IllegalStateException("Account " + disbursementAccountId + " already has a mortgage - only one is allowed");
         }
 
-        BigDecimal riskSpread = loanType == LoanType.MORTGAGE ? MORTGAGE_RISK_SPREAD : CONSUMER_RISK_SPREAD;
+        BigDecimal riskSpread = loanType == LoanType.MORTGAGE
+                ? MORTGAGE_RISK_SPREAD.add(policyLevers.state().mortgageSpreadAdjustment())
+                : CONSUMER_RISK_SPREAD.add(policyLevers.state().consumerSpreadAdjustment());
         BigDecimal annualRate = centralBankService.currentRates().policyRate().add(riskSpread);
         BigDecimal monthlyRate = annualRate.divide(MONTHS_PER_YEAR, MathContext.DECIMAL64);
         BigDecimal installmentAmount = installmentAmount(principal, monthlyRate, termMonths);

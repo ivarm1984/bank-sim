@@ -20,6 +20,8 @@ import io.github.ivarm1984.banksim.clock.ClockService;
 import io.github.ivarm1984.banksim.customer.Customer;
 import io.github.ivarm1984.banksim.customer.CustomerService;
 import io.github.ivarm1984.banksim.ledger.LedgerReconciliationService;
+import io.github.ivarm1984.banksim.policy.PolicyLevers;
+import io.github.ivarm1984.banksim.policy.PolicyLeversSnapshot;
 import io.github.ivarm1984.banksim.transaction.TransactionService;
 
 class LoanServiceTest extends PostgresIntegrationTest {
@@ -40,6 +42,8 @@ class LoanServiceTest extends PostgresIntegrationTest {
     private LedgerReconciliationService reconciliationService;
     @Autowired
     private TransactionService transactionService;
+    @Autowired
+    private PolicyLevers policyLevers;
 
     private Account openAccount() {
         Customer customer = customerService.create("Grace Hopper");
@@ -121,6 +125,37 @@ class LoanServiceTest extends PostgresIntegrationTest {
         assertThat(mortgage.annualRate()).isLessThan(consumer.annualRate());
         assertThat(mortgage.annualRate())
                 .isEqualByComparingTo(centralBankService.currentRates().policyRate().add(LoanService.MORTGAGE_RISK_SPREAD));
+    }
+
+    /**
+     * PolicyLevers is a shared Spring singleton across the whole
+     * Testcontainers-backed suite, so any test mutating it must restore the
+     * original snapshot in a {@code finally} - same hygiene
+     * TreasuryServiceTest's throttle test already applies.
+     */
+    @Test
+    void loanSpreadLeversAdjustMortgageAndConsumerRatesIndependently() {
+        clockService.reset();
+        Account account = openAccount();
+        PolicyLeversSnapshot original = policyLevers.state();
+        try {
+            policyLevers.update(new PolicyLeversSnapshot(
+                    original.savingsRateSpread(), new BigDecimal("0.0050"), new BigDecimal("-0.0100"),
+                    original.targetCapitalBuffer(), original.underwritingLooseness(), original.autoTapBorrowingFacility()));
+
+            LoanAccount mortgage = loanService.originateAndDisburse(
+                    account.customerId(), account.id(), LoanType.MORTGAGE, new BigDecimal("100000.00"), 240);
+            LoanAccount consumer = loanService.originateAndDisburse(
+                    account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 24);
+
+            BigDecimal policyRate = centralBankService.currentRates().policyRate();
+            assertThat(mortgage.annualRate())
+                    .isEqualByComparingTo(policyRate.add(LoanService.MORTGAGE_RISK_SPREAD).add(new BigDecimal("0.0050")));
+            assertThat(consumer.annualRate())
+                    .isEqualByComparingTo(policyRate.add(LoanService.CONSUMER_RISK_SPREAD).add(new BigDecimal("-0.0100")));
+        } finally {
+            policyLevers.update(original);
+        }
     }
 
     @Test

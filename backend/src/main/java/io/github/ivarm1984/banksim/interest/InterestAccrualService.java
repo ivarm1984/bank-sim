@@ -13,12 +13,14 @@ import org.springframework.transaction.annotation.Transactional;
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
 import io.github.ivarm1984.banksim.account.AccountType;
+import io.github.ivarm1984.banksim.centralbank.CentralBankService;
 import io.github.ivarm1984.banksim.ledger.EntryType;
 import io.github.ivarm1984.banksim.ledger.JournalEntryRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
 import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerService;
+import io.github.ivarm1984.banksim.policy.PolicyLevers;
 
 /**
  * Computes and posts one day's simple interest for one account. Kept as a
@@ -37,15 +39,20 @@ public class InterestAccrualService {
     private final LedgerService ledgerService;
     private final InterestRatePolicyRepository ratePolicyRepository;
     private final InterestAccrualRepository interestAccrualRepository;
+    private final CentralBankService centralBankService;
+    private final PolicyLevers policyLevers;
 
     public InterestAccrualService(
             AccountService accountService, LedgerAccountService ledgerAccountService, LedgerService ledgerService,
-            InterestRatePolicyRepository ratePolicyRepository, InterestAccrualRepository interestAccrualRepository) {
+            InterestRatePolicyRepository ratePolicyRepository, InterestAccrualRepository interestAccrualRepository,
+            CentralBankService centralBankService, PolicyLevers policyLevers) {
         this.accountService = accountService;
         this.ledgerAccountService = ledgerAccountService;
         this.ledgerService = ledgerService;
         this.ratePolicyRepository = ratePolicyRepository;
         this.interestAccrualRepository = interestAccrualRepository;
+        this.centralBankService = centralBankService;
+        this.policyLevers = policyLevers;
     }
 
     /**
@@ -58,7 +65,7 @@ public class InterestAccrualService {
     @Transactional
     public InterestAccrual accrueForAccount(long accountId, LocalDate date) {
         Account account = accountService.findById(accountId);
-        BigDecimal annualRate = ratePolicyRepository.findAnnualRate(account.accountType());
+        BigDecimal annualRate = annualRateFor(account.accountType());
         BigDecimal amount = accrualAmount(account.currentBalance(), annualRate);
 
         Long journalEntryId = null;
@@ -127,8 +134,29 @@ public class InterestAccrualService {
         return interestAccrualRepository.findByAccountId(accountId);
     }
 
-    /** Every seeded account-type rate, for {@link #accrueForChunk} - fetched once per batch, not once per chunk. */
+    /**
+     * Every account-type rate, for {@link #accrueForChunk} - fetched once per
+     * batch, not once per chunk. SAVINGS is overridden with the same
+     * central-bank-derived value {@link #annualRateFor} computes; the other
+     * types are the flat seeded DB rate.
+     */
     public Map<AccountType, BigDecimal> currentRates() {
-        return ratePolicyRepository.findAllRates();
+        Map<AccountType, BigDecimal> rates = new HashMap<>(ratePolicyRepository.findAllRates());
+        rates.put(AccountType.SAVINGS, savingsRate());
+        return rates;
+    }
+
+    /**
+     * SAVINGS prices off the central bank policy rate plus the CEO's
+     * lever-adjustable spread (see {@code policy.PolicyLevers}) - the
+     * rewiring deferred in M6.2. CHECKING/TERM_DEPOSIT stay on the flat
+     * seeded {@code interest.rate_policies} rate.
+     */
+    private BigDecimal annualRateFor(AccountType type) {
+        return type == AccountType.SAVINGS ? savingsRate() : ratePolicyRepository.findAnnualRate(type);
+    }
+
+    private BigDecimal savingsRate() {
+        return centralBankService.currentRates().policyRate().add(policyLevers.state().savingsRateSpread());
     }
 }

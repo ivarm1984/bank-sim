@@ -23,6 +23,8 @@ import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
 import io.github.ivarm1984.banksim.ledger.LedgerReconciliationService;
 import io.github.ivarm1984.banksim.loan.LoanService;
 import io.github.ivarm1984.banksim.loan.LoanType;
+import io.github.ivarm1984.banksim.policy.PolicyLevers;
+import io.github.ivarm1984.banksim.policy.PolicyLeversSnapshot;
 import io.github.ivarm1984.banksim.transaction.TransactionService;
 
 class TreasuryServiceTest extends PostgresIntegrationTest {
@@ -49,6 +51,8 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
     private ClockService clockService;
     @Autowired
     private CentralBankService centralBankService;
+    @Autowired
+    private PolicyLevers policyLevers;
 
     private Account openAccount() {
         Customer customer = customerService.create("Grace Hopper");
@@ -207,5 +211,62 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
                 .setScale(2, RoundingMode.HALF_UP);
         assertThat(outstandingAfter.subtract(outstandingBefore)).isEqualByComparingTo(expectedInterest);
         assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
+    }
+
+    /**
+     * {@code targetCapitalBuffer} shifts both the CAR and NSFR throttle
+     * thresholds up by the same amount - a snapshot healthy against the
+     * unshifted 8%/100% minimums becomes a breach once the buffer is raised.
+     * Cleans up in a {@code finally}/afterward, same reasoning as
+     * {@link #capitalBreachThrottlesLoanOriginationUntilRatiosRecover}.
+     */
+    @Test
+    void capitalBufferLeverRaisesTheThrottleThreshold() {
+        PolicyLeversSnapshot original = policyLevers.state();
+        try {
+            treasuryRatioRepository.insert(
+                    LocalDate.of(2094, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                    null, null, new BigDecimal("1.050000"), BigDecimal.ZERO, null, new BigDecimal("0.090000"));
+            assertThat(treasuryService.isLoanOriginationThrottled()).isFalse();
+
+            policyLevers.update(new PolicyLeversSnapshot(
+                    original.savingsRateSpread(), original.mortgageSpreadAdjustment(), original.consumerSpreadAdjustment(),
+                    new BigDecimal("0.02"), original.underwritingLooseness(), original.autoTapBorrowingFacility()));
+
+            assertThat(treasuryService.isLoanOriginationThrottled()).isTrue();
+        } finally {
+            policyLevers.update(original);
+            treasuryRatioRepository.insert(
+                    LocalDate.of(2094, 1, 2), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                    null, null, new BigDecimal("10.000000"), BigDecimal.ZERO, null, new BigDecimal("1.000000"));
+        }
+    }
+
+    @Test
+    void autoTapLeverDisabledSkipsTheAutoBorrowOnALiquidityBreach() {
+        PolicyLeversSnapshot original = policyLevers.state();
+        try {
+            policyLevers.update(new PolicyLeversSnapshot(
+                    original.savingsRateSpread(), original.mortgageSpreadAdjustment(), original.consumerSpreadAdjustment(),
+                    original.targetCapitalBuffer(), original.underwritingLooseness(), false));
+
+            BigDecimal outstandingBefore = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
+            TreasuryRatioSnapshot reservesBefore = treasuryService.computeAndPersist(LocalDate.of(2095, 1, 1));
+
+            // Same shortfall shape as liquidityBreachTriggersAnAutoBorrowAndRecoveryRepaysItBack.
+            TreasuryRatioSnapshot breach = new TreasuryRatioSnapshot(
+                    null, LocalDate.of(2095, 1, 2), BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO,
+                    new BigDecimal("100000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("1000.00"), null, null, null);
+            treasuryService.applyFeedback(breach);
+
+            BigDecimal outstandingAfter = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
+            TreasuryRatioSnapshot reservesAfter = treasuryService.computeAndPersist(LocalDate.of(2095, 1, 3));
+
+            assertThat(outstandingAfter).isEqualByComparingTo(outstandingBefore);
+            assertThat(reservesAfter.centralBankReserves()).isEqualByComparingTo(reservesBefore.centralBankReserves());
+            assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
+        } finally {
+            policyLevers.update(original);
+        }
     }
 }

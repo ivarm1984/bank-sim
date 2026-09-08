@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,9 +15,13 @@ import io.github.ivarm1984.banksim.PostgresIntegrationTest;
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
 import io.github.ivarm1984.banksim.account.AccountType;
+import io.github.ivarm1984.banksim.centralbank.CentralBankService;
+import io.github.ivarm1984.banksim.clock.ClockService;
 import io.github.ivarm1984.banksim.customer.Customer;
 import io.github.ivarm1984.banksim.customer.CustomerService;
 import io.github.ivarm1984.banksim.ledger.LedgerReconciliationService;
+import io.github.ivarm1984.banksim.policy.PolicyLevers;
+import io.github.ivarm1984.banksim.policy.PolicyLeversSnapshot;
 import io.github.ivarm1984.banksim.transaction.TransactionService;
 
 class InterestAccrualServiceTest extends PostgresIntegrationTest {
@@ -31,6 +36,18 @@ class InterestAccrualServiceTest extends PostgresIntegrationTest {
     private CustomerService customerService;
     @Autowired
     private LedgerReconciliationService reconciliationService;
+    @Autowired
+    private CentralBankService centralBankService;
+    @Autowired
+    private ClockService clockService;
+    @Autowired
+    private PolicyLevers policyLevers;
+
+    /** SAVINGS now prices off the central bank rate (see policy.PolicyLevers) - reset to the deterministic epoch date first. */
+    private BigDecimal savingsRateAtEpoch() {
+        clockService.reset();
+        return centralBankService.currentRates().policyRate().add(policyLevers.state().savingsRateSpread());
+    }
 
     private Account openAccount(AccountType type) {
         Customer customer = customerService.create("Ada Lovelace");
@@ -39,9 +56,9 @@ class InterestAccrualServiceTest extends PostgresIntegrationTest {
 
     @Test
     void accruesInterestOnSavingsBalanceAtSeededRateAndKeepsLedgerBalanced() {
+        BigDecimal annualRate = savingsRateAtEpoch();
         Account account = openAccount(AccountType.SAVINGS);
         transactionService.deposit(account.id(), new BigDecimal("10000.00"));
-        BigDecimal annualRate = new BigDecimal("0.0150");
         BigDecimal expectedAmount = new BigDecimal("10000.00")
                 .multiply(annualRate)
                 .divide(new BigDecimal("365"), 10, RoundingMode.HALF_UP)
@@ -82,12 +99,12 @@ class InterestAccrualServiceTest extends PostgresIntegrationTest {
 
     @Test
     void chunkedAccrualSharesOneJournalEntryAcrossAccountsAndKeepsLedgerBalanced() {
+        BigDecimal savingsRate = savingsRateAtEpoch();
         Account savings = openAccount(AccountType.SAVINGS);
         transactionService.deposit(savings.id(), new BigDecimal("10000.00"));
         Account checking = openAccount(AccountType.CHECKING); // 0% seeded rate - no ledger line for this one
         transactionService.deposit(checking.id(), new BigDecimal("500.00"));
         LocalDate date = LocalDate.of(2026, 1, 1);
-        BigDecimal savingsRate = new BigDecimal("0.0150");
         BigDecimal expectedSavingsAmount = new BigDecimal("10000.00")
                 .multiply(savingsRate)
                 .divide(new BigDecimal("365"), 10, RoundingMode.HALF_UP)
@@ -126,5 +143,29 @@ class InterestAccrualServiceTest extends PostgresIntegrationTest {
             assertThat(a.amount()).isEqualByComparingTo(BigDecimal.ZERO);
             assertThat(a.journalEntryId()).isNull();
         });
+    }
+
+    /**
+     * PolicyLevers is a shared Spring singleton across the whole
+     * Testcontainers-backed suite - restore the original snapshot in a
+     * {@code finally}, same hygiene TreasuryServiceTest/LoanServiceTest apply.
+     */
+    @Test
+    void savingsRateFollowsCentralBankRatePlusLeverSpreadWhileOtherTypesStayFlat() {
+        PolicyLeversSnapshot original = policyLevers.state();
+        try {
+            clockService.reset();
+            policyLevers.update(new PolicyLeversSnapshot(
+                    BigDecimal.ZERO, original.mortgageSpreadAdjustment(), original.consumerSpreadAdjustment(),
+                    original.targetCapitalBuffer(), original.underwritingLooseness(), original.autoTapBorrowingFacility()));
+
+            Map<AccountType, BigDecimal> rates = interestAccrualService.currentRates();
+
+            assertThat(rates.get(AccountType.SAVINGS)).isEqualByComparingTo(centralBankService.currentRates().policyRate());
+            assertThat(rates.get(AccountType.CHECKING)).isEqualByComparingTo(BigDecimal.ZERO);
+            assertThat(rates.get(AccountType.TERM_DEPOSIT)).isEqualByComparingTo(new BigDecimal("0.0300"));
+        } finally {
+            policyLevers.update(original);
+        }
     }
 }
