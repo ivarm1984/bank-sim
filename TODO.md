@@ -640,13 +640,72 @@ session: CEO.1 (below) → CEO.2 (`BankHealthService` + win condition) → CEO.3
     normally (reserves `1,000,000.00→1,919,975.73`) once flipped back on;
     `GET /api/ledger/trial-balance` stayed balanced throughout.
 
-### CEO.2+ — not started
-- [ ] `BankHealthService`: state machine watching `TreasuryRatiosUpdatedEvent` —
+### CEO.2 — BankHealthService + win/loss state machine ✅ done
+- [x] `BankHealthService`: state machine watching `TreasuryRatiosUpdatedEvent` —
       capital ratio below the CRR minimum for N consecutive days → regulator
       warning; a second breach → forced resolution (game over); liquidity
       exhausted against withdrawal demand → "bank run" failure mode
-- [ ] Win condition: survive a target number of simulated years, or hit a
-      profit/capital-growth target
+  - Design calls made via `AskUserQuestion`, deliberately picking the
+    simplest version of each mechanic that still teaches the underlying
+    lesson over a more textbook-accurate one (explicit user steer — see
+    `AGENTS.md`-style precedent of illustrative constants over full CRR
+    breakdowns): (1) **breach state machine** is a single streak counter per
+    ratio family, not separate "episodes" — 5 consecutive breach days →
+    `WARNING`, the *same* uninterrupted streak reaching 10 days →
+    `GAME_OVER`; a healthy day resets the streak to 0 (and the status back
+    off `WARNING`) with no memory of a past warning; (2) **bank run trigger**
+    reuses the existing `autoTapBorrowingFacility` lever (CEO.1) rather than
+    introducing a new central-bank-borrowing-cap concept — `liquidityBreach`
+    (LCR/reserve-coverage below 100%) held for 10 consecutive days →
+    `BANK_RUN`; with the lever on, `TreasuryService.applyFeedback` always
+    fully corrects the breach the same day, so a real streak only builds
+    when the CEO has knowingly switched the safety net off; (3) **win
+    condition** is survive `WIN_SURVIVAL_YEARS` (5) simulated years with
+    both streaks at zero — no separate profit/capital-growth target layered
+    on top, since staying within safe limits (not maximizing profit) is the
+    lesson M6/CEO.1 already teaches
+  - `TreasuryRatiosUpdatedEvent` gained a `liquidityBreach` field (true
+    whenever HQLA/reserve headroom is negative, computed *before* the
+    `autoTapBorrowingFacility` gate in `TreasuryService.applyFeedback`) -
+    needed because the event's existing `amountBorrowed`/`amountRepaid`
+    fields can't distinguish "no breach" from "breach detected but the lever
+    left it uncorrected" (both read as zero)
+  - New `bankhealth` package + schema (persisted, like `treasury`'s
+    `ratio_snapshots` - game state should survive an app restart, unlike
+    `PolicyLevers`/`SimulationClock`'s in-memory state): `health_snapshots`
+    (one row per simulated day: `status`, `capital_breach_streak`,
+    `liquidity_breach_streak`), `BankHealthService.computeAndPersist(event)`
+    chained off `TreasuryRatiosUpdatedEvent` via a new `BankHealthScheduler`
+    (same listener-chaining pattern `TreasuryRatioScheduler` already uses off
+    `StatementGenerationBatchCompletedEvent`)
+  - `BankHealthStatus.isTerminal()` (`GAME_OVER`/`BANK_RUN`/`WON`) makes the
+    state machine sticky: once a terminal status is reached,
+    `computeAndPersist` is a no-op forever after (no new row, no published
+    `BankHealthUpdatedEvent`) - the game has ended
+  - REST: `GET /api/bank-health/status` — 404 until at least one simulated
+    day has passed, otherwise the latest snapshot (mirrors
+    `GET /api/treasury/ratios`)
+  - Pure threshold/precedence logic pulled into a package-visible
+    `BankHealthService.deriveStatus` and covered by a plain unit test
+    (`BankHealthStatusTest`, no Spring/Postgres — same precedent as
+    `PolicyLeversTest`); `BankHealthServiceTest` (Testcontainers Postgres)
+    covers the stateful parts that actually need persistence: streak
+    accumulation/reset across real rows, and the terminal-freeze behavior.
+  - Verify: `./gradlew test` — 76 tests pass. Live (fresh dev DB, reset via
+    `docker compose down -v` + `up -d` since the previous session's dev DB
+    already had a multi-day-advanced treasury history that collided with a
+    freshly-booted clock's date range): `GET /api/bank-health/status` 404
+    before any day had run; after `step-day` showed `PLAYING`/`0`/`0`
+    chained correctly off the real `TreasuryRatiosUpdatedEvent`; stepping 4
+    more healthy days kept `PLAYING` with both streaks at 0. Originated an
+    80,000,000 mortgage to force a real CAR breach, then stepped 10 more
+    days one at a time: `capitalBreachStreak` climbed 1→9 with `status`
+    flipping to `WARNING` exactly at day 5, then `GAME_OVER` exactly at day
+    10; an 11th breached day left the snapshot completely unchanged (same
+    `id`, same date) confirming the freeze, with
+    `GET /api/ledger/trial-balance` staying balanced throughout.
+
+### CEO.3+ — not started
 - [ ] `EventInjector`: occasional macro shocks to react to rather than steady-state
       optimization — central-bank rate hike/cut, a recession event that spikes
       loan defaults, a deposit-run event (bad press / a competitor rate war)

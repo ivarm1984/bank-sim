@@ -1,0 +1,51 @@
+databaseChangeLog:
+  - changeSet:
+      id: bankhealth-0002-create-health-snapshots-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: bankhealth
+            tableName: health_snapshots
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: snapshot_date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  # PLAYING, WARNING, GAME_OVER, BANK_RUN, WON - see BankHealthStatus.
+                  name: status
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  # Consecutive simulated days TreasuryRatiosUpdatedEvent.loanOriginationThrottled()
+                  # has been true, resetting to 0 on any healthy day.
+                  name: capital_breach_streak
+                  type: integer
+                  constraints:
+                    nullable: false
+              - column:
+                  # Consecutive simulated days TreasuryRatiosUpdatedEvent.liquidityBreach()
+                  # has been true, resetting to 0 on any healthy day.
+                  name: liquidity_breach_streak
+                  type: integer
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              CREATE UNIQUE INDEX idx_health_snapshots_date
+              ON bankhealth.health_snapshots (snapshot_date);

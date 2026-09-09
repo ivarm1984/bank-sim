@@ -143,10 +143,11 @@ public class TreasuryService {
         BigDecimal estimatedThirtyDayOutflow = snapshot.customerDeposits().multiply(LCR_OUTFLOW_RATE);
         BigDecimal hqlaHeadroom = hqla.subtract(estimatedThirtyDayOutflow);
         BigDecimal reserveHeadroom = snapshot.centralBankReserves().subtract(snapshot.requiredReserves());
+        boolean liquidityBreach = hqlaHeadroom.signum() < 0 || reserveHeadroom.signum() < 0;
 
         BigDecimal amountBorrowed = BigDecimal.ZERO;
         BigDecimal amountRepaid = BigDecimal.ZERO;
-        if (hqlaHeadroom.signum() < 0 || reserveHeadroom.signum() < 0) {
+        if (liquidityBreach) {
             if (policyLevers.state().autoTapBorrowingFacility()) {
                 amountBorrowed = hqlaHeadroom.negate().max(reserveHeadroom.negate()).max(BigDecimal.ZERO)
                         .setScale(2, RoundingMode.HALF_UP);
@@ -164,7 +165,7 @@ public class TreasuryService {
         }
 
         events.publish(new TreasuryRatiosUpdatedEvent(
-                snapshot.snapshotDate(), isCapitalBreach(snapshot), amountBorrowed, amountRepaid));
+                snapshot.snapshotDate(), isCapitalBreach(snapshot), liquidityBreach, amountBorrowed, amountRepaid));
     }
 
     /**

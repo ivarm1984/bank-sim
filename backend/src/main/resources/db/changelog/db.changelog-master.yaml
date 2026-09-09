@@ -27,3 +27,6 @@ databaseChangeLog:
   - include:
       file: treasury/db.changelog-treasury.yaml
       relativeToChangelogFile: true
+  - include:
+      file: bankhealth/db.changelog-bankhealth.yaml
+      relativeToChangelogFile: true

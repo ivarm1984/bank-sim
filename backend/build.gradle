@@ -131,6 +131,9 @@ jooq {
 							schema {
 								inputSchema = 'treasury'
 							}
+							schema {
+								inputSchema = 'bankhealth'
+							}
 						}
 					}
 					target {
