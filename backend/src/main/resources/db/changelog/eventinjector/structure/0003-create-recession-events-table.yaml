@@ -1,0 +1,52 @@
+databaseChangeLog:
+  - changeSet:
+      id: eventinjector-0003-create-recession-events-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: eventinjector
+            tableName: recession_events
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: event_type
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: event_date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  # Set only on START rows - the recession is active while
+                  # event_date <= asOfDate < planned_end_date (see
+                  # RecessionShockService.isActive). Null on END rows.
+                  name: planned_end_date
+                  type: date
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE eventinjector.recession_events
+              ADD CONSTRAINT chk_recession_events_event_type
+              CHECK (event_type IN ('START', 'END'));
+        - createIndex:
+            schemaName: eventinjector
+            tableName: recession_events
+            indexName: idx_recession_events_event_date
+            columns:
+              - column:
+                  name: event_date

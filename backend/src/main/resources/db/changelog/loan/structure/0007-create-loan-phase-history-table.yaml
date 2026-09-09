@@ -1,0 +1,76 @@
+databaseChangeLog:
+  - changeSet:
+      id: loan-0007-create-loan-phase-history-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: loan
+            tableName: loan_phase_history
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: loan_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    references: loan.loans(id)
+                    foreignKeyName: fk_loan_phase_history_loan
+              - column:
+                  name: from_phase
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: to_phase
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: transition_date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  # Positive on a downgrade (provision increases), negative
+                  # on an upgrade/recovery (provision released) - see
+                  # LoanPhaseTransitionService.
+                  name: provision_delta
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Soft reference to ledger.journal_entries(id) - no
+                  # cross-schema FK, see AGENTS.md.
+                  name: journal_entry_id
+                  type: bigint
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE loan.loan_phase_history
+              ADD CONSTRAINT chk_loan_phase_history_from_phase
+              CHECK (from_phase IN ('PERFORMING', 'UNDERPERFORMING', 'NON_PERFORMING'));
+        - sql:
+            sql: >-
+              ALTER TABLE loan.loan_phase_history
+              ADD CONSTRAINT chk_loan_phase_history_to_phase
+              CHECK (to_phase IN ('PERFORMING', 'UNDERPERFORMING', 'NON_PERFORMING'));
+        - createIndex:
+            schemaName: loan
+            tableName: loan_phase_history
+            indexName: idx_loan_phase_history_loan_id
+            columns:
+              - column:
+                  name: loan_id

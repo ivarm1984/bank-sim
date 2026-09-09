@@ -134,6 +134,9 @@ jooq {
 							schema {
 								inputSchema = 'bankhealth'
 							}
+							schema {
+								inputSchema = 'eventinjector'
+							}
 						}
 					}
 					target {

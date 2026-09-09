@@ -705,10 +705,88 @@ session: CEO.1 (below) → CEO.2 (`BankHealthService` + win condition) → CEO.3
     `id`, same date) confirming the freeze, with
     `GET /api/ledger/trial-balance` staying balanced throughout.
 
-### CEO.3+ — not started
-- [ ] `EventInjector`: occasional macro shocks to react to rather than steady-state
-      optimization — central-bank rate hike/cut, a recession event that spikes
-      loan defaults, a deposit-run event (bad press / a competitor rate war)
+### CEO.3 — EventInjector + business loan provisioning ✅ done
+- [x] `EventInjector`: occasional macro shocks to react to rather than steady-state
+      optimization — central-bank rate hike/cut and a recession shock that drives
+      loan-loss provisioning. Both fire fully autonomously (random daily rolls off
+      `DayRolledOverEvent`) — no manual-trigger endpoint, by explicit design. The
+      deposit-run shock originally sketched here was dropped (explicit user call:
+      real-world deposit fluctuations are much smaller than a classic bank-run
+      panic, so it wasn't worth building for this milestone).
+  - Working through the shock types surfaced that this section's original wording
+    ("a recession event that spikes loan defaults") didn't fit the codebase — no
+    default/delinquency/NPL mechanic exists (still deferred, see "Complex
+    additions" below). The user's own framing pointed at real IFRS 9-style
+    loan-loss provisioning instead: a loan moves through risk phases, the bank
+    sets aside a provision, and a recovered loan releases it back as profit —
+    that reshaped this milestone into two coupled pieces (EventInjector itself,
+    and a new `BUSINESS` loan type with a phase/provisioning mechanic for the
+    recession shock to act on).
+  - New flat `eventinjector` package + schema: `RateShockService` (persisted
+    append-only `rate_shocks` log — a signed delta per shock date; the effective
+    offset as of a date is the sum of every delta on/before it, keeping
+    `CentralBankRateSchedule`'s own deterministic-by-date base rate untouched —
+    the shock layers on top in `CentralBankService.currentRates()`, not inside
+    the schedule) and `RecessionShockService` (persisted `recession_events`
+    START/END log rather than a boolean flag, so "active as of a date" stays a
+    pure derived read; a recession is a temporary elevated-risk window lasting a
+    randomized 6-18 simulated months). `EventInjectorScheduler` is the single
+    `@EventListener` on `DayRolledOverEvent`, calling rate shock roll → recession
+    tick → the loan phase-transition roll in order (each independently
+    try/caught, same isolation style as `TreasuryRatioScheduler`).
+  - New `LoanType.BUSINESS` (500bps spread — between MORTGAGE's 150bps and
+    CONSUMER's 900bps — 2-7 year terms), repeatable like CONSUMER (no
+    one-per-account restriction). `BorrowerAgent` got a third independent loan
+    slot for it, mirroring the CONSUMER slot exactly, so the recession shock has
+    visible effects in an ordinary autonomous playthrough. Completed CEO.1's
+    per-type policy-lever pattern with a `businessSpreadAdjustment` lever.
+  - New `LoanPhase` (PERFORMING/UNDERPERFORMING/NON_PERFORMING), meaningful only
+    for BUSINESS loans: a new `loan.LoanPhaseTransitionService` rolls daily
+    downgrade/recovery probability per active BUSINESS loan (baseline downgrade
+    risk even outside a recession — real business loans always carry some risk;
+    8x that rate during an active recession; recovery independent of recession
+    state) and posts the provisioning delta (10% of outstanding principal at
+    UNDERPERFORMING, 50% at NON_PERFORMING) to two new singleton ledger accounts,
+    `LOAN_LOSS_PROVISION`/`PROVISION_EXPENSE` — singleton rather than per-loan,
+    since `ledger_accounts`' unique `loan_id` index already allows only one
+    loan-tagged row per loan (claimed by `LOAN_RECEIVABLE`); per-loan provision
+    amount instead lives as a new `loans.provision_amount` column. A recovery
+    reverses the entry (released back as profit). New `loan_phase_history` table
+    (mirrors `loan_payments`' shape) gives a per-loan audit trail. Deliberately
+    accounting-only — a NON_PERFORMING loan still amortizes/repays normally
+    through `BorrowerAgent`/`LoanService.repay`, unaffected by its phase; the
+    full delinquency/NPL simulation stays deferred (see "Complex additions").
+  - Verify: `./gradlew test` — 98 tests pass, including new
+    `RateShockServiceTest`/`RecessionShockServiceTest` (Testcontainers Postgres,
+    forced via a test-seam `Random`), `LoanPhaseTransitionLogicTest` (plain unit
+    test for the pure phase state machine/provisioning formula, same precedent
+    as `BankHealthStatusTest`), `LoanPhaseTransitionServiceTest` (a full
+    downgrade→downgrade→recover→recover cycle on a real BUSINESS loan, checked
+    against `LedgerReconciliationService.trialBalance()` at every step), and new
+    cases in `LoanServiceTest`/`BorrowerAgentTest`/`CentralBankServiceTest` (the
+    last converted from a plain unit test to Postgres-integration, since
+    `CentralBankService` now has a DB-backed collaborator). Live (fresh dev DB):
+    originated MORTGAGE/BUSINESS/CONSUMER loans at the same principal/term and
+    confirmed BUSINESS priced strictly between the other two (4.50%/8.00%/12.00%
+    at the epoch policy rate); raising `businessSpreadAdjustment` by 1% shifted
+    the BUSINESS quote by exactly that. Temporarily raised the shock/downgrade
+    constants to near-certain to exercise the real random code paths end-to-end
+    (no manual-trigger endpoint exists by design): `POST /api/clock/step-day`
+    moved `GET /api/central-bank/rates` by exactly the shock magnitude (0.0300 →
+    0.0375 → back to 0.0300 on an offsetting shock) and started a recession
+    (`GET /api/event-injector/status` → `recessionActive: true`, a 16-month
+    window); active BUSINESS loans moved PERFORMING → UNDERPERFORMING →
+    NON_PERFORMING with `provisionAmount` at exactly 10%/50% of principal each
+    step, matched by `LOAN_LOSS_PROVISION`/`PROVISION_EXPENSE` moving by the same
+    deltas on `GET /api/ledger/accounts`; a later recovery roll reversed a loan
+    from NON_PERFORMING back to UNDERPERFORMING with provision released back
+    down; a MORTGAGE and a CONSUMER loan in the same run never left
+    `phase: PERFORMING`/`provisionAmount: 0`. `GET /api/ledger/trial-balance`
+    stayed balanced throughout. Reverted every temporarily-raised constant
+    afterward and re-ran the full suite to confirm it's still green at the real
+    values.
+
+### CEO.4 — not started
 - [ ] Frontend: CEO control panel (levers) + bank-health/score view, separate from
       the operational dashboard from M5
 

@@ -11,6 +11,7 @@ public record PolicyLeversSnapshot(
         BigDecimal savingsRateSpread,
         BigDecimal mortgageSpreadAdjustment,
         BigDecimal consumerSpreadAdjustment,
+        BigDecimal businessSpreadAdjustment,
         BigDecimal targetCapitalBuffer,
         BigDecimal underwritingLooseness,
         boolean autoTapBorrowingFacility) {

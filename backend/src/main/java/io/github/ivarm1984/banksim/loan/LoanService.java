@@ -47,11 +47,13 @@ public class LoanService {
     /**
      * Flat spreads added to the central bank policy rate, one per
      * {@link LoanType} - mortgages price low/long, consumer loans price
-     * high/short. Real per-borrower credit risk pricing is deferred - see
-     * TODO.md's "Complex additions" section ("Credit risk pricing").
+     * high/short, business loans sit between the two on both spread and term.
+     * Real per-borrower credit risk pricing is deferred - see TODO.md's
+     * "Complex additions" section ("Credit risk pricing").
      */
     static final BigDecimal MORTGAGE_RISK_SPREAD = new BigDecimal("0.0150");
     static final BigDecimal CONSUMER_RISK_SPREAD = new BigDecimal("0.0900");
+    static final BigDecimal BUSINESS_RISK_SPREAD = new BigDecimal("0.0500");
 
     private static final BigDecimal MONTHS_PER_YEAR = new BigDecimal("12");
 
@@ -99,9 +101,11 @@ public class LoanService {
             throw new IllegalStateException("Account " + disbursementAccountId + " already has a mortgage - only one is allowed");
         }
 
-        BigDecimal riskSpread = loanType == LoanType.MORTGAGE
-                ? MORTGAGE_RISK_SPREAD.add(policyLevers.state().mortgageSpreadAdjustment())
-                : CONSUMER_RISK_SPREAD.add(policyLevers.state().consumerSpreadAdjustment());
+        BigDecimal riskSpread = switch (loanType) {
+            case MORTGAGE -> MORTGAGE_RISK_SPREAD.add(policyLevers.state().mortgageSpreadAdjustment());
+            case CONSUMER -> CONSUMER_RISK_SPREAD.add(policyLevers.state().consumerSpreadAdjustment());
+            case BUSINESS -> BUSINESS_RISK_SPREAD.add(policyLevers.state().businessSpreadAdjustment());
+        };
         BigDecimal annualRate = centralBankService.currentRates().policyRate().add(riskSpread);
         BigDecimal monthlyRate = annualRate.divide(MONTHS_PER_YEAR, MathContext.DECIMAL64);
         BigDecimal installmentAmount = installmentAmount(principal, monthlyRate, termMonths);
@@ -231,7 +235,9 @@ public class LoanService {
 
     public LoanDetail findDetailById(long loanId) {
         LoanAccount loan = loanRepository.findById(loanId);
-        return new LoanDetail(loan, loanRepository.findInstallmentsByLoanId(loanId), loanRepository.findPaymentsByLoanId(loanId));
+        return new LoanDetail(
+                loan, loanRepository.findInstallmentsByLoanId(loanId), loanRepository.findPaymentsByLoanId(loanId),
+                loanRepository.findPhaseHistoryByLoanId(loanId));
     }
 
     public List<LoanAccount> findByAccountId(long accountId) {

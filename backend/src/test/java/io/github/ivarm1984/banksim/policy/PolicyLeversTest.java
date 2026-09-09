@@ -17,6 +17,7 @@ class PolicyLeversTest {
         assertThat(state.savingsRateSpread()).isEqualByComparingTo(PolicyLevers.DEFAULT_SAVINGS_RATE_SPREAD);
         assertThat(state.mortgageSpreadAdjustment()).isEqualByComparingTo(PolicyLevers.DEFAULT_SPREAD_ADJUSTMENT);
         assertThat(state.consumerSpreadAdjustment()).isEqualByComparingTo(PolicyLevers.DEFAULT_SPREAD_ADJUSTMENT);
+        assertThat(state.businessSpreadAdjustment()).isEqualByComparingTo(PolicyLevers.DEFAULT_SPREAD_ADJUSTMENT);
         assertThat(state.targetCapitalBuffer()).isEqualByComparingTo(PolicyLevers.DEFAULT_CAPITAL_BUFFER);
         assertThat(state.underwritingLooseness()).isEqualByComparingTo(PolicyLevers.DEFAULT_UNDERWRITING_LOOSENESS);
         assertThat(state.autoTapBorrowingFacility()).isEqualTo(PolicyLevers.DEFAULT_AUTO_TAP);
@@ -26,7 +27,7 @@ class PolicyLeversTest {
     void updateFullyReplacesTheSnapshot() {
         PolicyLevers levers = new PolicyLevers();
         PolicyLeversSnapshot next = new PolicyLeversSnapshot(
-                new BigDecimal("0.0025"), new BigDecimal("-0.0050"), new BigDecimal("0.0100"),
+                new BigDecimal("0.0025"), new BigDecimal("-0.0050"), new BigDecimal("0.0100"), new BigDecimal("0.0075"),
                 new BigDecimal("0.02"), new BigDecimal("0.75"), false);
 
         PolicyLeversSnapshot returned = levers.update(next);

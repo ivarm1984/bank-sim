@@ -2,6 +2,7 @@ package io.github.ivarm1984.banksim.loan;
 
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanInstallments.LOAN_INSTALLMENTS;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanPayments.LOAN_PAYMENTS;
+import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanPhaseHistory.LOAN_PHASE_HISTORY;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.Loans.LOANS;
 
 import java.math.BigDecimal;
@@ -112,6 +113,47 @@ public class LoanRepository {
                 .map(LoanRepository::toLoanAccount);
     }
 
+    /** Active loans of one type - used by the daily phase-transition roll, which only ever targets BUSINESS loans (a small fraction of the book, no batching needed). */
+    public List<LoanAccount> findActiveByLoanType(LoanType loanType) {
+        return dsl.selectFrom(LOANS)
+                .where(LOANS.LOAN_TYPE.eq(loanType.name()))
+                .and(LOANS.STATUS.eq(LoanStatus.ACTIVE.name()))
+                .orderBy(LOANS.ID)
+                .fetch()
+                .map(LoanRepository::toLoanAccount);
+    }
+
+    public void updatePhase(long loanId, LoanPhase phase, BigDecimal provisionAmount) {
+        dsl.update(LOANS)
+                .set(LOANS.PHASE, phase.name())
+                .set(LOANS.PROVISION_AMOUNT, provisionAmount)
+                .where(LOANS.ID.eq(loanId))
+                .execute();
+    }
+
+    public LoanPhaseTransition insertPhaseHistory(
+            long loanId, LoanPhase fromPhase, LoanPhase toPhase, LocalDate transitionDate, BigDecimal provisionDelta,
+            Long journalEntryId) {
+        var record = dsl.insertInto(LOAN_PHASE_HISTORY)
+                .set(LOAN_PHASE_HISTORY.LOAN_ID, loanId)
+                .set(LOAN_PHASE_HISTORY.FROM_PHASE, fromPhase.name())
+                .set(LOAN_PHASE_HISTORY.TO_PHASE, toPhase.name())
+                .set(LOAN_PHASE_HISTORY.TRANSITION_DATE, transitionDate)
+                .set(LOAN_PHASE_HISTORY.PROVISION_DELTA, provisionDelta)
+                .set(LOAN_PHASE_HISTORY.JOURNAL_ENTRY_ID, journalEntryId)
+                .returning()
+                .fetchOne();
+        return toLoanPhaseTransition(record);
+    }
+
+    public List<LoanPhaseTransition> findPhaseHistoryByLoanId(long loanId) {
+        return dsl.selectFrom(LOAN_PHASE_HISTORY)
+                .where(LOAN_PHASE_HISTORY.LOAN_ID.eq(loanId))
+                .orderBy(LOAN_PHASE_HISTORY.ID)
+                .fetch()
+                .map(LoanRepository::toLoanPhaseTransition);
+    }
+
     public List<LoanInstallment> findInstallmentsByLoanId(long loanId) {
         return dsl.selectFrom(LOAN_INSTALLMENTS)
                 .where(LOAN_INSTALLMENTS.LOAN_ID.eq(loanId))
@@ -142,6 +184,8 @@ public class LoanRepository {
                 record.getOutstandingPrincipal(),
                 record.getNextInstallmentNumber(),
                 LoanStatus.valueOf(record.getStatus()),
+                LoanPhase.valueOf(record.getPhase()),
+                record.getProvisionAmount(),
                 record.getCreatedAt());
     }
 
@@ -167,6 +211,18 @@ public class LoanRepository {
                 record.getInterestPortion(),
                 record.getPrincipalPortion(),
                 record.getOutstandingPrincipalAfter(),
+                record.getJournalEntryId(),
+                record.getCreatedAt());
+    }
+
+    private static LoanPhaseTransition toLoanPhaseTransition(io.github.ivarm1984.banksim.jooq.loan.tables.records.LoanPhaseHistoryRecord record) {
+        return new LoanPhaseTransition(
+                record.getId(),
+                record.getLoanId(),
+                LoanPhase.valueOf(record.getFromPhase()),
+                LoanPhase.valueOf(record.getToPhase()),
+                record.getTransitionDate(),
+                record.getProvisionDelta(),
                 record.getJournalEntryId(),
                 record.getCreatedAt());
     }

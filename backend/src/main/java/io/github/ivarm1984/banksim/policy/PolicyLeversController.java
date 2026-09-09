@@ -26,6 +26,7 @@ public class PolicyLeversController {
     public PolicyLeversSnapshot update(@Valid @RequestBody PolicyLeversRequest request) {
         return policyLevers.update(new PolicyLeversSnapshot(
                 request.savingsRateSpread(), request.mortgageSpreadAdjustment(), request.consumerSpreadAdjustment(),
-                request.targetCapitalBuffer(), request.underwritingLooseness(), request.autoTapBorrowingFacility()));
+                request.businessSpreadAdjustment(), request.targetCapitalBuffer(), request.underwritingLooseness(),
+                request.autoTapBorrowingFacility()));
     }
 }

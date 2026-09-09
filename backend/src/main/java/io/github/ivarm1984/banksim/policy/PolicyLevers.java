@@ -28,7 +28,7 @@ public class PolicyLevers {
     static final boolean DEFAULT_AUTO_TAP = true;
 
     private final AtomicReference<PolicyLeversSnapshot> state = new AtomicReference<>(new PolicyLeversSnapshot(
-            DEFAULT_SAVINGS_RATE_SPREAD, DEFAULT_SPREAD_ADJUSTMENT, DEFAULT_SPREAD_ADJUSTMENT,
+            DEFAULT_SAVINGS_RATE_SPREAD, DEFAULT_SPREAD_ADJUSTMENT, DEFAULT_SPREAD_ADJUSTMENT, DEFAULT_SPREAD_ADJUSTMENT,
             DEFAULT_CAPITAL_BUFFER, DEFAULT_UNDERWRITING_LOOSENESS, DEFAULT_AUTO_TAP));
 
     public PolicyLeversSnapshot state() {

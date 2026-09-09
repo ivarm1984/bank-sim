@@ -29,10 +29,10 @@ import io.github.ivarm1984.banksim.clock.SimulationClock;
  * consecutive seeds is strongly correlated, which was caught here by a test
  * asserting the rate actually moves over a long horizon, not just that it
  * stays in bounds. Advancing one shared, sequentially-seeded generator
- * avoids that.) Nothing here reacts to
- * simulated events yet (loan volume, deposit runs, ...) — a later milestone
- * (see TODO.md's "EventInjector" / rate-shock ideas) can layer real
- * feedback on top of this baseline drift.
+ * avoids that.) This schedule stays a pure function of date - it does not
+ * react to simulated events. Random rate shocks (see
+ * {@code eventinjector.RateShockService}) are layered on top of this
+ * baseline drift in {@code CentralBankService.currentRates()}, not here.
  */
 @Component
 public class CentralBankRateSchedule {
@@ -83,7 +83,8 @@ public class CentralBankRateSchedule {
         return 1;
     }
 
-    private static BigDecimal clamp(BigDecimal rate) {
+    /** Package-visible so CentralBankService can clamp a rate-shock-adjusted policy rate to the same bounds. */
+    static BigDecimal clamp(BigDecimal rate) {
         if (rate.compareTo(MIN_POLICY_RATE) < 0) {
             return MIN_POLICY_RATE;
         }

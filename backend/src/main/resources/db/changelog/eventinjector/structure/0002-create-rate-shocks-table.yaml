@@ -1,0 +1,43 @@
+databaseChangeLog:
+  - changeSet:
+      id: eventinjector-0002-create-rate-shocks-table
+      author: ivarm1984
+      changes:
+        - createTable:
+            schemaName: eventinjector
+            tableName: rate_shocks
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: shock_date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  # Signed offset added on top of CentralBankRateSchedule's
+                  # deterministic policy rate - effective offset as of a
+                  # date is the sum of every row with shock_date <= that
+                  # date (see RateShockService.offsetAsOf).
+                  name: delta
+                  type: numeric(6,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - createIndex:
+            schemaName: eventinjector
+            tableName: rate_shocks
+            indexName: idx_rate_shocks_shock_date
+            columns:
+              - column:
+                  name: shock_date

@@ -1,0 +1,15 @@
+databaseChangeLog:
+  - changeSet:
+      id: ledger-data-0005-seed-loan-loss-provision-account
+      author: ivarm1984
+      changes:
+        - insert:
+            schemaName: ledger
+            tableName: ledger_accounts
+            columns:
+              - column:
+                  name: type
+                  value: LOAN_LOSS_PROVISION
+              - column:
+                  name: name
+                  value: Loan Loss Provision

@@ -17,5 +17,7 @@ public record LoanAccount(
         BigDecimal outstandingPrincipal,
         int nextInstallmentNumber,
         LoanStatus status,
+        LoanPhase phase,
+        BigDecimal provisionAmount,
         OffsetDateTime createdAt) {
 }

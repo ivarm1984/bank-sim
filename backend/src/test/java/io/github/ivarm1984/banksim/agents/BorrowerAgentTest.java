@@ -51,7 +51,7 @@ class BorrowerAgentTest extends PostgresIntegrationTest {
     }
 
     @Test
-    void takesAMortgageAndAConsumerLoanOnASuccessfulRollAndNeverTakesASecondMortgage() {
+    void takesAMortgageAConsumerLoanAndABusinessLoanOnASuccessfulRollAndNeverTakesASecondMortgage() {
         Account account = openAccount();
         AgentContext context = new AgentContext(transactionService, accountService, events, loanService);
         BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0));
@@ -60,8 +60,51 @@ class BorrowerAgentTest extends PostgresIntegrationTest {
         agent.onTick(LocalDateTime.of(2026, 1, 2, 9, 0), context);
 
         List<LoanAccount> loans = loanService.findByAccountId(account.id());
-        assertThat(loans).extracting(LoanAccount::loanType).containsExactlyInAnyOrder(LoanType.MORTGAGE, LoanType.CONSUMER);
+        assertThat(loans).extracting(LoanAccount::loanType)
+                .containsExactlyInAnyOrder(LoanType.MORTGAGE, LoanType.CONSUMER, LoanType.BUSINESS);
         assertThat(loans.stream().filter(l -> l.loanType() == LoanType.MORTGAGE)).hasSize(1);
+    }
+
+    /** A Random whose every roll succeeds and every random-index pick lands on index 0 (shortest term, minimum principal). */
+    private static Random alwaysRollsAndPicksTheShortestTerm() {
+        return new Random() {
+            @Override
+            public double nextDouble() {
+                return 0.0;
+            }
+
+            @Override
+            public int nextInt(int bound) {
+                return 0;
+            }
+        };
+    }
+
+    @Test
+    void businessLoanSlotFreesUpOncePaidOffInFullAllowingAnotherToBeTaken() {
+        Account account = openAccount();
+        AgentContext context = new AgentContext(transactionService, accountService, events, loanService);
+        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRollsAndPicksTheShortestTerm());
+        transactionService.deposit(account.id(), new BigDecimal("50000.00"));
+
+        LocalDateTime tick = LocalDateTime.of(2026, 1, 1, 9, 0);
+        agent.onTick(tick, context);
+        LoanAccount firstBusinessLoan = loanService.findByAccountId(account.id()).stream()
+                .filter(l -> l.loanType() == LoanType.BUSINESS).findFirst().orElseThrow();
+        assertThat(firstBusinessLoan.termMonths()).isEqualTo(24);
+
+        for (int month = 1; month <= firstBusinessLoan.termMonths(); month++) {
+            tick = tick.plusMonths(1);
+            agent.onTick(tick, context);
+        }
+
+        LoanAccount paidOff = loanService.findById(firstBusinessLoan.id());
+        assertThat(paidOff.status()).isEqualTo(LoanStatus.PAID_OFF);
+        assertThat(paidOff.outstandingPrincipal()).isEqualByComparingTo(BigDecimal.ZERO);
+
+        List<LoanAccount> businessLoans = loanService.findByAccountId(account.id()).stream()
+                .filter(l -> l.loanType() == LoanType.BUSINESS).toList();
+        assertThat(businessLoans).hasSize(2);
     }
 
     @Test

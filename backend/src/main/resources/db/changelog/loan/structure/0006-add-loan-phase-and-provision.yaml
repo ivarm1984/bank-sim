@@ -1,0 +1,39 @@
+databaseChangeLog:
+  - changeSet:
+      id: loan-0006-add-loan-phase-and-provision
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: loan
+            tableName: loans
+            columns:
+              - column:
+                  # PERFORMING/UNDERPERFORMING/NON_PERFORMING - see LoanPhase.
+                  # Meaningful only for BUSINESS loans; MORTGAGE/CONSUMER stay
+                  # PERFORMING for their whole life. Existing rows default to
+                  # PERFORMING since this codebase has no production data to
+                  # preserve.
+                  name: phase
+                  type: varchar(20)
+                  defaultValue: PERFORMING
+                  constraints:
+                    nullable: false
+              - column:
+                  # Loan-loss provision currently held against this specific
+                  # loan - a percentage of outstanding_principal by phase
+                  # (see LoanPhaseTransitionService). Aggregated on the
+                  # ledger side via the singleton LOAN_LOSS_PROVISION /
+                  # PROVISION_EXPENSE accounts, not a per-loan ledger account
+                  # (ledger.ledger_accounts' unique loan_id index already
+                  # allows only one loan_id-tagged row per loan, claimed by
+                  # LOAN_RECEIVABLE).
+                  name: provision_amount
+                  type: numeric(19,4)
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE loan.loans
+              ADD CONSTRAINT chk_loans_phase
+              CHECK (phase IN ('PERFORMING', 'UNDERPERFORMING', 'NON_PERFORMING'));

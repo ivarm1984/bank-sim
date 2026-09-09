@@ -231,7 +231,8 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
 
             policyLevers.update(new PolicyLeversSnapshot(
                     original.savingsRateSpread(), original.mortgageSpreadAdjustment(), original.consumerSpreadAdjustment(),
-                    new BigDecimal("0.02"), original.underwritingLooseness(), original.autoTapBorrowingFacility()));
+                    original.businessSpreadAdjustment(), new BigDecimal("0.02"), original.underwritingLooseness(),
+                    original.autoTapBorrowingFacility()));
 
             assertThat(treasuryService.isLoanOriginationThrottled()).isTrue();
         } finally {
@@ -248,7 +249,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         try {
             policyLevers.update(new PolicyLeversSnapshot(
                     original.savingsRateSpread(), original.mortgageSpreadAdjustment(), original.consumerSpreadAdjustment(),
-                    original.targetCapitalBuffer(), original.underwritingLooseness(), false));
+                    original.businessSpreadAdjustment(), original.targetCapitalBuffer(), original.underwritingLooseness(), false));
 
             BigDecimal outstandingBefore = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
             TreasuryRatioSnapshot reservesBefore = treasuryService.computeAndPersist(LocalDate.of(2095, 1, 1));

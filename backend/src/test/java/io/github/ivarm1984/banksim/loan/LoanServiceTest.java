@@ -134,28 +134,50 @@ class LoanServiceTest extends PostgresIntegrationTest {
      * TreasuryServiceTest's throttle test already applies.
      */
     @Test
-    void loanSpreadLeversAdjustMortgageAndConsumerRatesIndependently() {
+    void loanSpreadLeversAdjustMortgageConsumerAndBusinessRatesIndependently() {
         clockService.reset();
         Account account = openAccount();
         PolicyLeversSnapshot original = policyLevers.state();
         try {
             policyLevers.update(new PolicyLeversSnapshot(
-                    original.savingsRateSpread(), new BigDecimal("0.0050"), new BigDecimal("-0.0100"),
+                    original.savingsRateSpread(), new BigDecimal("0.0050"), new BigDecimal("-0.0100"), new BigDecimal("0.0200"),
                     original.targetCapitalBuffer(), original.underwritingLooseness(), original.autoTapBorrowingFacility()));
 
             LoanAccount mortgage = loanService.originateAndDisburse(
                     account.customerId(), account.id(), LoanType.MORTGAGE, new BigDecimal("100000.00"), 240);
             LoanAccount consumer = loanService.originateAndDisburse(
                     account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 24);
+            LoanAccount business = loanService.originateAndDisburse(
+                    account.customerId(), account.id(), LoanType.BUSINESS, new BigDecimal("50000.00"), 60);
 
             BigDecimal policyRate = centralBankService.currentRates().policyRate();
             assertThat(mortgage.annualRate())
                     .isEqualByComparingTo(policyRate.add(LoanService.MORTGAGE_RISK_SPREAD).add(new BigDecimal("0.0050")));
             assertThat(consumer.annualRate())
                     .isEqualByComparingTo(policyRate.add(LoanService.CONSUMER_RISK_SPREAD).add(new BigDecimal("-0.0100")));
+            assertThat(business.annualRate())
+                    .isEqualByComparingTo(policyRate.add(LoanService.BUSINESS_RISK_SPREAD).add(new BigDecimal("0.0200")));
         } finally {
             policyLevers.update(original);
         }
+    }
+
+    @Test
+    void businessLoanPricesBetweenMortgageAndConsumerForTheSamePrincipalAndTerm() {
+        clockService.reset();
+        Account account = openAccount();
+
+        LoanAccount mortgage = loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.MORTGAGE, new BigDecimal("100000.00"), 60);
+        LoanAccount business = loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.BUSINESS, new BigDecimal("100000.00"), 60);
+        LoanAccount consumer = loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("100000.00"), 60);
+
+        assertThat(business.annualRate()).isGreaterThan(mortgage.annualRate());
+        assertThat(business.annualRate()).isLessThan(consumer.annualRate());
+        assertThat(business.phase()).isEqualTo(LoanPhase.PERFORMING);
+        assertThat(business.provisionAmount()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     @Test

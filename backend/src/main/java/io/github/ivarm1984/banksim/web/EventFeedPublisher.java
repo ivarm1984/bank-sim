@@ -10,8 +10,12 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import io.github.ivarm1984.banksim.agents.BillPaymentFailedEvent;
 import io.github.ivarm1984.banksim.clock.DayRolledOverEvent;
+import io.github.ivarm1984.banksim.eventinjector.RateShockTriggeredEvent;
+import io.github.ivarm1984.banksim.eventinjector.RecessionEndedEvent;
+import io.github.ivarm1984.banksim.eventinjector.RecessionStartedEvent;
 import io.github.ivarm1984.banksim.interest.InterestAccrualBatchCompletedEvent;
 import io.github.ivarm1984.banksim.loan.LoanOriginatedEvent;
+import io.github.ivarm1984.banksim.loan.LoanPhaseChangedEvent;
 import io.github.ivarm1984.banksim.loan.LoanRepaidEvent;
 import io.github.ivarm1984.banksim.transaction.TransactionCompletedEvent;
 
@@ -66,6 +70,30 @@ public class EventFeedPublisher {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onLoanRepaid(LoanRepaidEvent event) {
         send("LOAN_REPAID", event);
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onRateShockTriggered(RateShockTriggeredEvent event) {
+        send("RATE_SHOCK_TRIGGERED", event);
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onRecessionStarted(RecessionStartedEvent event) {
+        send("RECESSION_STARTED", event);
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onRecessionEnded(RecessionEndedEvent event) {
+        send("RECESSION_ENDED", event);
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onLoanPhaseChanged(LoanPhaseChangedEvent event) {
+        send("LOAN_PHASE_CHANGED", event);
     }
 
     private void send(String type, Object payload) {

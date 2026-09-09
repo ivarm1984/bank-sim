@@ -18,5 +18,9 @@ public enum LedgerAccountType {
     /** Singleton income account: interest earned on loans. */
     INTEREST_INCOME,
     /** Singleton liability account: outstanding draws on the central bank's marginal lending facility. */
-    CENTRAL_BANK_BORROWINGS
+    CENTRAL_BANK_BORROWINGS,
+    /** Singleton contra-asset account: loan-loss provisions held against BUSINESS loans currently UNDERPERFORMING/NON_PERFORMING. */
+    LOAN_LOSS_PROVISION,
+    /** Singleton expense account: provisioning expense/release, debited on a phase downgrade's provision increase, credited (reversed) on a recovery. */
+    PROVISION_EXPENSE
 }

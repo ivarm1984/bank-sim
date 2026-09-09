@@ -1,0 +1,15 @@
+databaseChangeLog:
+  - changeSet:
+      id: ledger-data-0006-seed-provision-expense-account
+      author: ivarm1984
+      changes:
+        - insert:
+            schemaName: ledger
+            tableName: ledger_accounts
+            columns:
+              - column:
+                  name: type
+                  value: PROVISION_EXPENSE
+              - column:
+                  name: name
+                  value: Provision Expense

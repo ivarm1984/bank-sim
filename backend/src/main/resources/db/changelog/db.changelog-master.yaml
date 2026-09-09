@@ -30,3 +30,6 @@ databaseChangeLog:
   - include:
       file: bankhealth/db.changelog-bankhealth.yaml
       relativeToChangelogFile: true
+  - include:
+      file: eventinjector/db.changelog-eventinjector.yaml
+      relativeToChangelogFile: true

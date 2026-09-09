@@ -11,16 +11,20 @@ import io.github.ivarm1984.banksim.loan.LoanType;
 
 /**
  * Takes out at most one mortgage (ever) and, independently, a consumer loan
- * whenever it doesn't currently have one active - each on a random daily
- * roll, like {@link RandomSpenderAgent} - then pays the fixed monthly
- * installment on the due day, like {@link BillPayAgent}. A missed payment
- * (insufficient funds) is silently skipped, same as {@link RandomSpenderAgent}'s
- * spend-skip - delinquency/NPL tracking is deliberately out of scope here.
+ * and a business loan, each whenever it doesn't currently have one active -
+ * each on its own random daily roll, like {@link RandomSpenderAgent} - then
+ * pays the fixed monthly installment on the due day, like
+ * {@link BillPayAgent}. A missed payment (insufficient funds) is silently
+ * skipped, same as {@link RandomSpenderAgent}'s spend-skip -
+ * delinquency/NPL tracking is deliberately out of scope here (a BUSINESS
+ * loan's phase/provisioning, driven separately by
+ * {@code loan.LoanPhaseTransitionService}, never affects repayment).
  */
 public class BorrowerAgent implements Agent {
 
     private static final double MORTGAGE_DAILY_PROBABILITY = 0.0005;
     private static final double CONSUMER_LOAN_DAILY_PROBABILITY = 0.01;
+    private static final double BUSINESS_LOAN_DAILY_PROBABILITY = 0.002;
 
     private static final BigDecimal MORTGAGE_MIN_PRINCIPAL = new BigDecimal("80000.00");
     private static final BigDecimal MORTGAGE_MAX_PRINCIPAL = new BigDecimal("350000.00");
@@ -29,6 +33,10 @@ public class BorrowerAgent implements Agent {
     private static final BigDecimal CONSUMER_MIN_PRINCIPAL = new BigDecimal("1000.00");
     private static final BigDecimal CONSUMER_MAX_PRINCIPAL = new BigDecimal("15000.00");
     private static final int[] CONSUMER_TERM_MONTHS = {12, 24, 36};
+
+    private static final BigDecimal BUSINESS_MIN_PRINCIPAL = new BigDecimal("20000.00");
+    private static final BigDecimal BUSINESS_MAX_PRINCIPAL = new BigDecimal("200000.00");
+    private static final int[] BUSINESS_TERM_MONTHS = {24, 36, 60, 84};
 
     private final long customerId;
     private final long accountId;
@@ -44,6 +52,11 @@ public class BorrowerAgent implements Agent {
     private BigDecimal consumerInstallmentAmount;
     private int consumerDueDay;
     private LocalDate consumerLastPaidOn;
+
+    private Long businessLoanId;
+    private BigDecimal businessInstallmentAmount;
+    private int businessDueDay;
+    private LocalDate businessLastPaidOn;
 
     private LocalDate lastActedOn;
 
@@ -69,6 +82,7 @@ public class BorrowerAgent implements Agent {
         lastActedOn = today;
         maybeTakeMortgage(context);
         maybeTakeConsumerLoan(context);
+        maybeTakeBusinessLoan(context);
     }
 
     private void payDueInstallments(LocalDate today, AgentContext context) {
@@ -81,6 +95,12 @@ public class BorrowerAgent implements Agent {
                 consumerLoanId = null;
             }
             consumerLastPaidOn = today;
+        }
+        if (businessLoanId != null && today.getDayOfMonth() == businessDueDay && !today.equals(businessLastPaidOn)) {
+            if (pay(businessLoanId, businessInstallmentAmount, context)) {
+                businessLoanId = null;
+            }
+            businessLastPaidOn = today;
         }
     }
 
@@ -123,6 +143,23 @@ public class BorrowerAgent implements Agent {
             consumerLoanId = loan.id();
             consumerInstallmentAmount = loan.installmentAmount();
             consumerDueDay = loan.originationDate().getDayOfMonth();
+        } catch (RuntimeException e) {
+            // Throttled or otherwise rejected - roll again another day.
+        }
+    }
+
+    private void maybeTakeBusinessLoan(AgentContext context) {
+        if (businessLoanId != null || random.nextDouble() >= BUSINESS_LOAN_DAILY_PROBABILITY) {
+            return;
+        }
+        BigDecimal principal = randomAmountBetween(BUSINESS_MIN_PRINCIPAL, BUSINESS_MAX_PRINCIPAL);
+        int termMonths = BUSINESS_TERM_MONTHS[random.nextInt(BUSINESS_TERM_MONTHS.length)];
+        try {
+            LoanAccount loan = context.loanService()
+                    .originateAndDisburse(customerId, accountId, LoanType.BUSINESS, principal, termMonths);
+            businessLoanId = loan.id();
+            businessInstallmentAmount = loan.installmentAmount();
+            businessDueDay = loan.originationDate().getDayOfMonth();
         } catch (RuntimeException e) {
             // Throttled or otherwise rejected - roll again another day.
         }

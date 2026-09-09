@@ -157,7 +157,8 @@ class InterestAccrualServiceTest extends PostgresIntegrationTest {
             clockService.reset();
             policyLevers.update(new PolicyLeversSnapshot(
                     BigDecimal.ZERO, original.mortgageSpreadAdjustment(), original.consumerSpreadAdjustment(),
-                    original.targetCapitalBuffer(), original.underwritingLooseness(), original.autoTapBorrowingFacility()));
+                    original.businessSpreadAdjustment(), original.targetCapitalBuffer(), original.underwritingLooseness(),
+                    original.autoTapBorrowingFacility()));
 
             Map<AccountType, BigDecimal> rates = interestAccrualService.currentRates();
 
