@@ -72,3 +72,46 @@ export interface EventFeedMessage {
   payload: unknown
   occurredAt: string
 }
+
+export interface PolicyLeversSnapshot {
+  savingsRateSpread: number
+  mortgageSpreadAdjustment: number
+  consumerSpreadAdjustment: number
+  businessSpreadAdjustment: number
+  targetCapitalBuffer: number
+  underwritingLooseness: number
+  autoTapBorrowingFacility: boolean
+}
+
+export interface TreasuryRatioSnapshot {
+  id: number
+  snapshotDate: string
+  bankCash: number
+  centralBankReserves: number
+  loansReceivable: number
+  customerDeposits: number
+  capitalBase: number
+  loanToDepositRatio: number | null
+  liquidityCoverageRatio: number | null
+  netStableFundingRatio: number | null
+  requiredReserves: number | null
+  reserveCoverageRatio: number | null
+  capitalAdequacyRatio: number | null
+  createdAt: string
+}
+
+export type BankHealthStatus = 'PLAYING' | 'WARNING' | 'GAME_OVER' | 'BANK_RUN' | 'WON'
+
+export interface BankHealthSnapshot {
+  id: number
+  snapshotDate: string
+  status: BankHealthStatus
+  capitalBreachStreak: number
+  liquidityBreachStreak: number
+  createdAt: string
+}
+
+export interface EventInjectorStatus {
+  cumulativeRateOffset: number
+  recessionActive: boolean
+}

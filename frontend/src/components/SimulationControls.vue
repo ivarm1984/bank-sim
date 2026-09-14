@@ -40,6 +40,10 @@ function applySpeed() {
       ></span>
       <h1 class="font-serif text-2xl tracking-tight text-ink">Bank-Sim</h1>
       <span class="font-mono text-lg tabular-nums text-ink-soft">{{ simulatedTime }}</span>
+      <nav class="flex items-center gap-3 text-sm">
+        <RouterLink to="/" class="text-ink-soft hover:text-ink" active-class="font-medium text-ink underline">Dashboard</RouterLink>
+        <RouterLink to="/ceo" class="text-ink-soft hover:text-ink" active-class="font-medium text-ink underline">CEO mode</RouterLink>
+      </nav>
     </div>
 
     <div class="flex flex-wrap items-center gap-2">

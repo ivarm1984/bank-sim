@@ -786,9 +786,53 @@ session: CEO.1 (below) → CEO.2 (`BankHealthService` + win condition) → CEO.3
     afterward and re-ran the full suite to confirm it's still green at the real
     values.
 
-### CEO.4 — not started
-- [ ] Frontend: CEO control panel (levers) + bank-health/score view, separate from
+### CEO.4 — done
+- [x] Frontend: CEO control panel (levers) + bank-health/score view, separate from
       the operational dashboard from M5
+  - Design calls made via `AskUserQuestion`: (1) added `vue-router` (new dependency)
+    rather than a plain local-state view toggle — the frontend had no router at all
+    before this (`App.vue` mounted `DashboardView` directly), and real routes
+    (`/`, `/ceo`) give bookmarkable/back-button-friendly navigation for what's
+    otherwise a permanent second page, not a modal-like toggle; (2) the CEO view
+    shows policy levers *and* bank-health status *and* the treasury ratio table
+    *and* event-injector status together, not just levers+health as the milestone's
+    literal wording suggested — a bare `WARNING`/streak-count is hard to interpret
+    without the ratios and shocks driving it
+  - New `router/index.ts` (`/` → `DashboardView`, `/ceo` → `CeoView`); `App.vue` is
+    now just `<RouterView />`. Nav links (`RouterLink` to `/` and `/ceo`) added to
+    the existing shared `SimulationControls.vue` header so both views keep the same
+    clock controls and navigation
+  - New read-only API modules (`api/treasury.ts`, `api/bankHealth.ts`,
+    `api/eventInjector.ts`) — `/api/treasury/ratios` and `/api/bank-health/status`
+    both 404 until the first simulated day completes, so both wrap that into a
+    `null` return (component shows "step the clock forward a day" rather than an
+    error), same contract the backend controllers already documented
+  - New `stores/policyLevers.ts` (Pinia store modeled on `stores/clock.ts` -
+    `load`/`update`, since it's the one CEO-view concern that's actually mutable)
+  - New components: `PolicyLeversPanel.vue` (all 7 levers as one full-replace form
+    — the API's `POST /api/policy-levers` replaces the whole snapshot, so edits are
+    held as local percent-unit drafts and only sent together on "Apply levers";
+    the placeholder `underwritingLooseness` field is labeled as not yet wired to
+    anything), `BankHealthPanel.vue`, `TreasuryRatiosPanel.vue`,
+    `EventInjectorPanel.vue` (each reloads via REST on the relevant already-bridged
+    `/topic/events` WS message - `DAY_ROLLED_OVER` for health/ratios,
+    `RATE_SHOCK_TRIGGERED`/`RECESSION_STARTED`/`RECESSION_ENDED` for the event
+    injector - no new backend WS bridging needed since none of `BankHealthUpdatedEvent`/
+    `TreasuryRatiosUpdatedEvent` needed adding to `EventFeedPublisher`)
+  - Verify: `npm run build` (vue-tsc + vite) clean. Live in Chrome (fresh dev DB,
+    `docker compose down -v` + `up -d`, confirmed necessary — the previously-running
+    dev DB had stale `ratio_snapshots`/`health_snapshots` rows past the reset
+    clock's date, which threw a duplicate-key error on the next `step-day`; a
+    pre-existing gap where `clock/reset` doesn't clear those tables, not something
+    from this milestone): `/ceo` before any simulated day showed the "no data
+    yet" states on the health/ratio panels; changing `savingsRateSpread` and
+    clicking "Apply levers" persisted immediately to `GET /api/policy-levers`;
+    "Step day" advanced the header via `/topic/clock` and, once the EOD chain
+    completed, `BankHealthPanel`/`TreasuryRatiosPanel` updated live off the
+    `DAY_ROLLED_OVER` WS message with no manual refresh (`Playing`, streaks 0/0,
+    LDR 19.38%/LCR 857.69%/NSFR 577.64%/reserve coverage 509.50%/CAR 26.56%); the
+    `Dashboard`/`CEO mode` nav links round-tripped between both views with no
+    console errors and the existing M5 dashboard unaffected.
 
 ## Complex additions (deferred domain depth)
 
