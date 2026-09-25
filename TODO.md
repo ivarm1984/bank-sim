@@ -170,7 +170,7 @@ already decided vs. still open.
       `BANK_CAPITAL`, 1,000,000.00 — an arbitrary round seed value, easy to
       change later) via `LedgerService.post(...)`, idempotent on
       `LedgerAccountService.hasAnyLedgerLines(bankCapitalId)`
-- [ ] `LOAN_RECEIVABLE` (one per loan, analogous to `CUSTOMER_LIABILITY`) is
+- [x] `LOAN_RECEIVABLE` (one per loan, analogous to `CUSTOMER_LIABILITY`) is
       *not* created here — deferred to M6.3 where the `loan` schema/table it
       references actually exists
 - [x] Verify: schema/accounts exist, trial balance still zero after seeding
@@ -1041,8 +1041,39 @@ end-to-end.
     as `ratio_snapshots.non_performing_loan_ratio` (`treasury-0005`) and shown
     in `TreasuryRatiosPanel` against the EBA risk-dashboard buckets (<2% low,
     >5% high). Reported only - it doesn't feed the throttle or bank health
-- [ ] Credit risk pricing: risk-based spread per borrower (simple credit score
+- [x] Credit risk pricing: risk-based spread per borrower (simple credit score
       or income/debt ratio at origination) instead of a flat spread
+  - Design calls (via `AskUserQuestion`): risk from grade + DSTI; the
+    per-loan PD drives defaults and ECL, not just price; `underwritingLooseness`
+    comes back as a PD approval cutoff; cost-based spread formula
+  - `customer-0003`: `credit_grade` (A-E) + `monthly_income` on customers
+    (defaults C / 3,000). `DataSeeder` draws grades 20/30/25/15/10% and an
+    income ±40% around a per-grade typical (4,800 .. 2,100) from its own
+    seeded generator; salary agents pay the customer's income
+  - `CreditRisk`: baseline PD = product PD × grade multiplier (0.4/0.7/1/1.8/3)
+    × DSTI band multiplier (≤30% 1, ≤40% 1.5, ≤50% 2.5, else 4), capped at
+    50%. DSTI = all active installments + the new one ÷ income, assessed at
+    the rate before the expected-loss premium. DSTI > 60% is always declined;
+    otherwise the (recession-adjusted) PD must be ≤ 2% + 28% × looseness (16%
+    at the default 0.5) - `LoanDeclinedException` (400 over REST)
+  - `RiskBasedPricing`: rate = policy rate + base margin (0.99/6.56/3.08%) +
+    PD × LGD + risk weight × (OCR + management buffer) × 10% hurdle + the
+    product spread lever, to a basis point. Margins calibrated so a grade C,
+    low-DSTI borrower pays about the old flat 1.5/9/5% spreads
+  - `loan-0010`: `loans.probability_of_default` (baseline PD - existing rows
+    backfilled with the product PD), used for ECL and `BorrowerAgent`'s
+    distress roll; `loan_pricing` table (grade, income, DSTI, PD, each spread
+    component) exposed as `LoanDetail.pricing`. `LoanOriginatedEvent` carries
+    grade and PD; the event feed shows grade and rate (and now labels business
+    loans correctly). CEO panel: "Approval cutoff: max borrower PD" lever
+  - Verify: `./gradlew test` - 130 pass, incl. new `RiskBasedPricingTest`,
+    `CreditRiskTest` PD/cutoff cases and `LoanServiceTest` grade/DSTI/decline/
+    cutoff/breakdown cases. `npm run build` clean. Live: reset dev DB, booted,
+    stepped days - PD and rate rise A→E for every product (e.g. consumer
+    1.07% / 11.14% for A vs 7.84% / 15.20% for E), trial balance balanced
+  - Known effect: business loans (20k-200k) against personal incomes often
+    breach the 60% DSTI limit - ~60% of business applications are declined,
+    so the business book grows much slower than before
 - [x] Loan-loss provisioning: provision expense posted against expected/actual
       defaults (IFRS 9-style expected credit loss, simplified; done in CEO.5b)
 - [x] Write-offs: a defaulted loan that never cures stays on the book forever;

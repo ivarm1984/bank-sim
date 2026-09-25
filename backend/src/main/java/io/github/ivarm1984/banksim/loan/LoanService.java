@@ -12,6 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import io.github.ivarm1984.banksim.centralbank.CentralBankService;
 import io.github.ivarm1984.banksim.clock.ClockService;
+import io.github.ivarm1984.banksim.customer.Customer;
+import io.github.ivarm1984.banksim.customer.CustomerService;
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
 import io.github.ivarm1984.banksim.eventinjector.RecessionShockService;
 import io.github.ivarm1984.banksim.ledger.EntryType;
@@ -21,6 +23,7 @@ import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
 import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerService;
 import io.github.ivarm1984.banksim.policy.PolicyLevers;
+import io.github.ivarm1984.banksim.policy.PolicyLeversSnapshot;
 import io.github.ivarm1984.banksim.treasury.TreasuryService;
 
 /**
@@ -46,17 +49,6 @@ import io.github.ivarm1984.banksim.treasury.TreasuryService;
 @Service
 public class LoanService {
 
-    /**
-     * Flat spreads added to the central bank policy rate, one per
-     * {@link LoanType} - mortgages price low/long, consumer loans price
-     * high/short, business loans sit between the two on both spread and term.
-     * Real per-borrower credit risk pricing is deferred - see TODO.md's
-     * "Complex additions" section ("Credit risk pricing").
-     */
-    static final BigDecimal MORTGAGE_RISK_SPREAD = new BigDecimal("0.0150");
-    static final BigDecimal CONSUMER_RISK_SPREAD = new BigDecimal("0.0900");
-    static final BigDecimal BUSINESS_RISK_SPREAD = new BigDecimal("0.0500");
-
     private static final BigDecimal MONTHS_PER_YEAR = new BigDecimal("12");
 
     private final LoanRepository loanRepository;
@@ -69,12 +61,13 @@ public class LoanService {
     private final PolicyLevers policyLevers;
     private final LoanProvisionPoster provisionPoster;
     private final RecessionShockService recessionShockService;
+    private final CustomerService customerService;
 
     public LoanService(
             LoanRepository loanRepository, LedgerService ledgerService, LedgerAccountService ledgerAccountService,
             CentralBankService centralBankService, ClockService clockService, DomainEventPublisher events,
             TreasuryService treasuryService, PolicyLevers policyLevers, LoanProvisionPoster provisionPoster,
-            RecessionShockService recessionShockService) {
+            RecessionShockService recessionShockService, CustomerService customerService) {
         this.loanRepository = loanRepository;
         this.ledgerService = ledgerService;
         this.ledgerAccountService = ledgerAccountService;
@@ -85,12 +78,24 @@ public class LoanService {
         this.policyLevers = policyLevers;
         this.provisionPoster = provisionPoster;
         this.recessionShockService = recessionShockService;
+        this.customerService = customerService;
     }
 
     /**
-     * Approves a loan: computes its fixed rate and installment amount and
-     * persists the full amortization schedule. No money moves yet - see
+     * Underwrites and approves a loan: rates the borrower (PD from product,
+     * credit grade and debt service to income - see {@link CreditRisk}),
+     * declines it if unaffordable or riskier than the CEO's approval cutoff,
+     * prices it (see {@link RiskBasedPricing}), then persists the loan, its
+     * pricing and the full amortization schedule. No money moves yet - see
      * {@link #disburse(long)}.
+     *
+     * <p>Affordability is assessed at the rate before the credit-risk
+     * premium, since that premium itself depends on the DSTI being assessed.
+     * Both the approval cutoff and the price use the recession-adjusted PD,
+     * so credit tightens and gets dearer while a recession is on; the loan
+     * stores the baseline PD, which its ECL stresses again day by day.
+     *
+     * @throws LoanDeclinedException if underwriting turns the borrower down
      */
     @Transactional
     public LoanAccount originate(long customerId, long disbursementAccountId, LoanType loanType, BigDecimal principal, int termMonths) {
@@ -108,21 +113,55 @@ public class LoanService {
             throw new IllegalStateException("Account " + disbursementAccountId + " already has a mortgage - only one is allowed");
         }
 
-        BigDecimal riskSpread = switch (loanType) {
-            case MORTGAGE -> MORTGAGE_RISK_SPREAD.add(policyLevers.state().mortgageSpreadAdjustment());
-            case CONSUMER -> CONSUMER_RISK_SPREAD.add(policyLevers.state().consumerSpreadAdjustment());
-            case BUSINESS -> BUSINESS_RISK_SPREAD.add(policyLevers.state().businessSpreadAdjustment());
+        PolicyLeversSnapshot levers = policyLevers.state();
+        BigDecimal spreadAdjustment = switch (loanType) {
+            case MORTGAGE -> levers.mortgageSpreadAdjustment();
+            case CONSUMER -> levers.consumerSpreadAdjustment();
+            case BUSINESS -> levers.businessSpreadAdjustment();
         };
-        BigDecimal annualRate = centralBankService.currentRates().policyRate().add(riskSpread);
-        BigDecimal monthlyRate = annualRate.divide(MONTHS_PER_YEAR, MathContext.DECIMAL64);
+        BigDecimal policyRate = centralBankService.currentRates().policyRate();
+        BigDecimal capitalRequirement = TreasuryService.OVERALL_CAPITAL_REQUIREMENT.add(levers.targetCapitalBuffer());
+
+        Customer customer = customerService.findById(customerId);
+        BigDecimal affordabilityRate = RiskBasedPricing.rateBeforeCreditRisk(loanType, policyRate, capitalRequirement, spreadAdjustment);
+        BigDecimal debtService = loanRepository.activeInstallmentsByCustomerId(customerId)
+                .add(installmentAmount(principal, monthlyRate(affordabilityRate), termMonths));
+        BigDecimal debtServiceToIncome = debtService.divide(customer.monthlyIncome(), 6, RoundingMode.HALF_UP);
+        if (debtServiceToIncome.compareTo(CreditRisk.MAX_DEBT_SERVICE_TO_INCOME) > 0) {
+            throw new LoanDeclinedException("Declined: debt service would be " + percent(debtServiceToIncome)
+                    + " of income, above the " + percent(CreditRisk.MAX_DEBT_SERVICE_TO_INCOME) + " affordability limit");
+        }
+
+        BigDecimal baselinePd = CreditRisk.borrowerDefaultProbability(loanType, customer.creditGrade(), debtServiceToIncome);
+        BigDecimal pricingPd = CreditRisk.twelveMonthDefaultProbability(baselinePd, recessionActiveToday());
+        BigDecimal maxPd = CreditRisk.maxApprovalDefaultProbability(levers.underwritingLooseness());
+        if (pricingPd.compareTo(maxPd) > 0) {
+            throw new LoanDeclinedException("Declined: PD " + percent(pricingPd) + " (grade " + customer.creditGrade()
+                    + ", DSTI " + percent(debtServiceToIncome) + ") is above the " + percent(maxPd) + " approval cutoff");
+        }
+
+        LoanPricing pricing = RiskBasedPricing.price(
+                loanType, customer.creditGrade(), customer.monthlyIncome(), debtServiceToIncome, pricingPd, policyRate,
+                capitalRequirement, spreadAdjustment);
+        BigDecimal monthlyRate = monthlyRate(pricing.annualRate());
         BigDecimal installmentAmount = installmentAmount(principal, monthlyRate, termMonths);
         LocalDate originationDate = clockService.state().simulatedTime().toLocalDate();
 
         LoanAccount loan = loanRepository.insertLoan(
-                customerId, disbursementAccountId, loanType, principal, annualRate, termMonths, installmentAmount, originationDate);
+                customerId, disbursementAccountId, loanType, baselinePd, principal, pricing.annualRate(), termMonths,
+                installmentAmount, originationDate);
+        loanRepository.insertPricing(loan.id(), pricing);
 
         generateSchedule(loan.id(), principal, monthlyRate, installmentAmount, termMonths, originationDate);
         return loan;
+    }
+
+    private static BigDecimal monthlyRate(BigDecimal annualRate) {
+        return annualRate.divide(MONTHS_PER_YEAR, MathContext.DECIMAL64);
+    }
+
+    private static String percent(BigDecimal fraction) {
+        return fraction.movePointRight(2).setScale(1, RoundingMode.HALF_UP) + "%";
     }
 
     private boolean hasMortgage(long disbursementAccountId) {
@@ -149,13 +188,14 @@ public class LoanService {
                         new LedgerLineRequest(liabilityId, EntryType.CREDIT, loan.principal()))));
 
         BigDecimal initialProvision = CreditRisk.expectedCreditLoss(
-                loan.loanType(), LoanPhase.PERFORMING, loan.principal(), loan.termMonths(), recessionActiveToday());
+                loan.loanType(), loan.probabilityOfDefault(), LoanPhase.PERFORMING, loan.principal(), loan.termMonths(), recessionActiveToday());
         provisionPoster.post(initialProvision, "Loan " + loanId + " initial Stage 1 ECL");
         loanRepository.updateProvision(loanId, initialProvision);
 
+        LoanPricing pricing = loanRepository.findPricingByLoanId(loanId).orElse(null);
         events.publish(new LoanOriginatedEvent(
                 loan.id(), loan.customerId(), loan.disbursementAccountId(), loan.loanType(), loan.principal(),
-                loan.annualRate(), loan.termMonths()));
+                loan.annualRate(), loan.termMonths(), pricing == null ? null : pricing.creditGrade(), loan.probabilityOfDefault()));
         return loan;
     }
 
@@ -185,7 +225,7 @@ public class LoanService {
             throw new IllegalStateException("Loan " + loanId + " is not active");
         }
 
-        BigDecimal monthlyRate = loan.annualRate().divide(MONTHS_PER_YEAR, MathContext.DECIMAL64);
+        BigDecimal monthlyRate = monthlyRate(loan.annualRate());
         BigDecimal outstandingPrincipal = loan.outstandingPrincipal();
         BigDecimal interestDue = outstandingPrincipal.multiply(monthlyRate).setScale(2, RoundingMode.HALF_UP);
         if (amount.compareTo(interestDue) < 0) {
@@ -278,7 +318,7 @@ public class LoanService {
         BigDecimal newProvision = paidOff
                 ? BigDecimal.ZERO
                 : CreditRisk.expectedCreditLoss(
-                        loan.loanType(), loan.phase(), newOutstandingPrincipal, remainingMonths, recessionActiveToday());
+                        loan.loanType(), loan.probabilityOfDefault(), loan.phase(), newOutstandingPrincipal, remainingMonths, recessionActiveToday());
         BigDecimal delta = newProvision.subtract(loan.provisionAmount());
         if (delta.signum() == 0) {
             return;
@@ -300,7 +340,8 @@ public class LoanService {
         LoanAccount loan = loanRepository.findById(loanId);
         return new LoanDetail(
                 loan, loanRepository.findInstallmentsByLoanId(loanId), loanRepository.findPaymentsByLoanId(loanId),
-                loanRepository.findPhaseHistoryByLoanId(loanId), loanRepository.findWriteOffByLoanId(loanId).orElse(null));
+                loanRepository.findPhaseHistoryByLoanId(loanId), loanRepository.findWriteOffByLoanId(loanId).orElse(null),
+                loanRepository.findPricingByLoanId(loanId).orElse(null));
     }
 
     public List<LoanAccount> findByAccountId(long accountId) {

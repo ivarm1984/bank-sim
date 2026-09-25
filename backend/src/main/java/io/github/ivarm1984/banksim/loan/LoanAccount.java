@@ -9,6 +9,8 @@ public record LoanAccount(
         Long customerId,
         Long disbursementAccountId,
         LoanType loanType,
+        /** Baseline 12-month PD fixed at origination - see {@link CreditRisk#borrowerDefaultProbability}. */
+        BigDecimal probabilityOfDefault,
         BigDecimal principal,
         BigDecimal annualRate,
         int termMonths,

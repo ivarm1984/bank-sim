@@ -12,16 +12,20 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import io.github.ivarm1984.banksim.PostgresIntegrationTest;
+import io.github.ivarm1984.banksim.TestCustomers;
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
 import io.github.ivarm1984.banksim.account.AccountType;
 import io.github.ivarm1984.banksim.centralbank.CentralBankService;
 import io.github.ivarm1984.banksim.clock.ClockService;
+import io.github.ivarm1984.banksim.customer.CreditGrade;
 import io.github.ivarm1984.banksim.customer.Customer;
 import io.github.ivarm1984.banksim.customer.CustomerService;
+import io.github.ivarm1984.banksim.customer.NewCustomer;
 import io.github.ivarm1984.banksim.ledger.LedgerReconciliationService;
 import io.github.ivarm1984.banksim.policy.PolicyLevers;
 import io.github.ivarm1984.banksim.policy.PolicyLeversSnapshot;
+import io.github.ivarm1984.banksim.treasury.TreasuryService;
 import io.github.ivarm1984.banksim.transaction.TransactionService;
 
 class LoanServiceTest extends PostgresIntegrationTest {
@@ -46,7 +50,7 @@ class LoanServiceTest extends PostgresIntegrationTest {
     private PolicyLevers policyLevers;
 
     private Account openAccount() {
-        Customer customer = customerService.create("Grace Hopper");
+        Customer customer = customerService.create(TestCustomers.affluent("Grace Hopper"));
         return accountService.open(customer.id(), AccountType.CHECKING);
     }
 
@@ -55,10 +59,30 @@ class LoanServiceTest extends PostgresIntegrationTest {
         transactionService.deposit(accountId, new BigDecimal("10000.00"));
     }
 
+    private Account openAccount(CreditGrade grade, String monthlyIncome) {
+        Customer customer = customerService.create(new NewCustomer("Borrower " + grade, grade, new BigDecimal(monthlyIncome)));
+        return accountService.open(customer.id(), AccountType.CHECKING);
+    }
+
     /** Resets the clock to its deterministic epoch date, so the central bank policy rate (and thus loan pricing) is fixed. */
     private BigDecimal annualRateAtEpoch() {
         clockService.reset();
-        return centralBankService.currentRates().policyRate().add(LoanService.CONSUMER_RISK_SPREAD);
+        return averageBorrowerRate(LoanType.CONSUMER);
+    }
+
+    /**
+     * What a grade C, low-DSTI borrower pays at today's policy rate with the
+     * default levers - hand-built from the pricing formula's parts: funding +
+     * base margin + PD x LGD + risk weight x OCR x hurdle rate.
+     */
+    private BigDecimal averageBorrowerRate(LoanType type) {
+        BigDecimal expectedLoss = CreditRisk.productDefaultProbability(type).multiply(CreditRisk.lossGivenDefault(type));
+        BigDecimal capital = TreasuryService.performingRiskWeight(type)
+                .multiply(TreasuryService.OVERALL_CAPITAL_REQUIREMENT)
+                .multiply(RiskBasedPricing.CAPITAL_HURDLE_RATE);
+        return centralBankService.currentRates().policyRate()
+                .add(RiskBasedPricing.baseMargin(type)).add(expectedLoss).add(capital)
+                .setScale(4, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal monthlyRateOf(BigDecimal annualRate) {
@@ -123,8 +147,7 @@ class LoanServiceTest extends PostgresIntegrationTest {
                 account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 24);
 
         assertThat(mortgage.annualRate()).isLessThan(consumer.annualRate());
-        assertThat(mortgage.annualRate())
-                .isEqualByComparingTo(centralBankService.currentRates().policyRate().add(LoanService.MORTGAGE_RISK_SPREAD));
+        assertThat(mortgage.annualRate()).isEqualByComparingTo(averageBorrowerRate(LoanType.MORTGAGE));
     }
 
     /**
@@ -150,16 +173,116 @@ class LoanServiceTest extends PostgresIntegrationTest {
             LoanAccount business = loanService.originateAndDisburse(
                     account.customerId(), account.id(), LoanType.BUSINESS, new BigDecimal("50000.00"), 60);
 
-            BigDecimal policyRate = centralBankService.currentRates().policyRate();
             assertThat(mortgage.annualRate())
-                    .isEqualByComparingTo(policyRate.add(LoanService.MORTGAGE_RISK_SPREAD).add(new BigDecimal("0.0050")));
+                    .isEqualByComparingTo(averageBorrowerRate(LoanType.MORTGAGE).add(new BigDecimal("0.0050")));
             assertThat(consumer.annualRate())
-                    .isEqualByComparingTo(policyRate.add(LoanService.CONSUMER_RISK_SPREAD).add(new BigDecimal("-0.0100")));
+                    .isEqualByComparingTo(averageBorrowerRate(LoanType.CONSUMER).add(new BigDecimal("-0.0100")));
             assertThat(business.annualRate())
-                    .isEqualByComparingTo(policyRate.add(LoanService.BUSINESS_RISK_SPREAD).add(new BigDecimal("0.0200")));
+                    .isEqualByComparingTo(averageBorrowerRate(LoanType.BUSINESS).add(new BigDecimal("0.0200")));
         } finally {
             policyLevers.update(original);
         }
+    }
+
+    @Test
+    void worseGradesGetAHigherPdAndPayMoreForTheSameLoan() {
+        clockService.reset();
+        Account prime = openAccount(CreditGrade.A, "5000.00");
+        Account subprime = openAccount(CreditGrade.E, "5000.00");
+
+        LoanAccount good = loanService.originateAndDisburse(
+                prime.customerId(), prime.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 24);
+        LoanAccount bad = loanService.originateAndDisburse(
+                subprime.customerId(), subprime.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 24);
+
+        // 2.5% consumer baseline x 0.4 (A) / x 3.0 (E); a 5,000 loan is well under 30% DSTI.
+        assertThat(good.probabilityOfDefault()).isEqualByComparingTo("0.010");
+        assertThat(bad.probabilityOfDefault()).isEqualByComparingTo("0.075");
+        // The only price difference is the expected loss: (7.5% - 1.0%) x 60% LGD = 3.90%.
+        assertThat(bad.annualRate().subtract(good.annualRate())).isEqualByComparingTo("0.0390");
+    }
+
+    @Test
+    void existingDebtRaisesTheDebtServiceToIncomeAndWithItThePd() {
+        clockService.reset();
+        Account account = openAccount(CreditGrade.C, "3000.00");
+
+        LoanAccount first = loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("12000.00"), 12);
+        LoanAccount second = loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("6000.00"), 12);
+
+        LoanPricing firstPricing = loanService.findDetailById(first.id()).pricing();
+        LoanPricing secondPricing = loanService.findDetailById(second.id()).pricing();
+        // ~1,060/month on 3,000 is in the 30-40% band; another ~530 on top lands above 50%.
+        assertThat(firstPricing.debtServiceToIncome()).isBetween(new BigDecimal("0.30"), new BigDecimal("0.40"));
+        assertThat(secondPricing.debtServiceToIncome()).isBetween(new BigDecimal("0.50"), new BigDecimal("0.60"));
+        assertThat(first.probabilityOfDefault()).isEqualByComparingTo("0.0375");
+        assertThat(second.probabilityOfDefault()).isEqualByComparingTo("0.100");
+        assertThat(second.annualRate()).isGreaterThan(first.annualRate());
+    }
+
+    @Test
+    void aLoanThatWouldTakeDebtServiceAboveSixtyPercentOfIncomeIsDeclined() {
+        clockService.reset();
+        Account account = openAccount(CreditGrade.A, "2000.00");
+
+        assertThatThrownBy(() -> loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.BUSINESS, new BigDecimal("100000.00"), 60))
+                .isInstanceOf(LoanDeclinedException.class)
+                .hasMessageContaining("affordability limit");
+        assertThat(loanService.findByAccountId(account.id())).isEmpty();
+    }
+
+    @Test
+    void theUnderwritingLoosenessLeverSetsThePdApprovalCutoff() {
+        clockService.reset();
+        Account account = openAccount(CreditGrade.E, "5000.00");
+        PolicyLeversSnapshot original = policyLevers.state();
+        try {
+            // Grade E consumer PD is 7.5%. Looseness 0.1 -> cutoff 2% + 28% x 0.1 = 4.8%: declined.
+            policyLevers.update(withLooseness(original, new BigDecimal("0.10")));
+            assertThatThrownBy(() -> loanService.originateAndDisburse(
+                    account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 24))
+                    .isInstanceOf(LoanDeclinedException.class)
+                    .hasMessageContaining("approval cutoff");
+
+            // Looseness 0.25 -> 9%: approved.
+            policyLevers.update(withLooseness(original, new BigDecimal("0.25")));
+            LoanAccount loan = loanService.originateAndDisburse(
+                    account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 24);
+            assertThat(loan.status()).isEqualTo(LoanStatus.ACTIVE);
+        } finally {
+            policyLevers.update(original);
+        }
+    }
+
+    private static PolicyLeversSnapshot withLooseness(PolicyLeversSnapshot s, BigDecimal looseness) {
+        return new PolicyLeversSnapshot(
+                s.savingsRateSpread(), s.mortgageSpreadAdjustment(), s.consumerSpreadAdjustment(), s.businessSpreadAdjustment(),
+                s.targetCapitalBuffer(), looseness, s.autoTapBorrowingFacility());
+    }
+
+    @Test
+    void thePricingBreakdownAddsUpToTheLoanRateAndIsKeptWithTheLoan() {
+        clockService.reset();
+        Account account = openAccount(CreditGrade.D, "4000.00");
+
+        LoanAccount loan = loanService.originateAndDisburse(
+                account.customerId(), account.id(), LoanType.BUSINESS, new BigDecimal("30000.00"), 60);
+        LoanPricing pricing = loanService.findDetailById(loan.id()).pricing();
+
+        assertThat(pricing.creditGrade()).isEqualTo(CreditGrade.D);
+        assertThat(pricing.monthlyIncome()).isEqualByComparingTo("4000.00");
+        assertThat(pricing.pricingProbabilityOfDefault()).isEqualByComparingTo(loan.probabilityOfDefault());
+        assertThat(pricing.annualRate()).isEqualByComparingTo(loan.annualRate());
+        assertThat(pricing.policyRate().add(pricing.baseMargin()).add(pricing.expectedLossSpread())
+                .add(pricing.capitalSpread()).add(pricing.spreadAdjustment()).setScale(4, RoundingMode.HALF_UP))
+                .isEqualByComparingTo(loan.annualRate());
+        // The day-one Stage 1 allowance uses the borrower's own PD, not the product baseline.
+        assertThat(loanService.findById(loan.id()).provisionAmount()).isEqualByComparingTo(new BigDecimal("30000.00")
+                .multiply(loan.probabilityOfDefault()).multiply(CreditRisk.lossGivenDefault(LoanType.BUSINESS))
+                .setScale(2, RoundingMode.HALF_UP));
     }
 
     @Test

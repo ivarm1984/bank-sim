@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import io.github.ivarm1984.banksim.PostgresIntegrationTest;
+import io.github.ivarm1984.banksim.TestCustomers;
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
 import io.github.ivarm1984.banksim.account.AccountType;
@@ -54,7 +55,7 @@ class LoanStagingServiceTest extends PostgresIntegrationTest {
     private LedgerReconciliationService reconciliationService;
 
     private LoanAccount originateBusinessLoan(BigDecimal principal) {
-        Customer customer = customerService.create("Test Business Borrower");
+        Customer customer = customerService.create(TestCustomers.affluent("Test Business Borrower"));
         Account account = accountService.open(customer.id(), AccountType.CHECKING);
         return loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.BUSINESS, principal, 60);
     }
@@ -72,7 +73,7 @@ class LoanStagingServiceTest extends PostgresIntegrationTest {
         LoanAccount loan = originateBusinessLoan(new BigDecimal("100000.00"));
 
         BigDecimal expected = CreditRisk.expectedCreditLoss(
-                LoanType.BUSINESS, LoanPhase.PERFORMING, new BigDecimal("100000.00"), 60, recessionToday());
+                LoanType.BUSINESS, CreditRisk.productDefaultProbability(LoanType.BUSINESS), LoanPhase.PERFORMING, new BigDecimal("100000.00"), 60, recessionToday());
         assertThat(expected).isPositive();
         assertThat(loanService.findById(loan.id()).provisionAmount()).isEqualByComparingTo(expected);
         assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
@@ -90,9 +91,9 @@ class LoanStagingServiceTest extends PostgresIntegrationTest {
         LoanAccount stage2 = loanService.findById(loan.id());
         assertThat(stage2.phase()).isEqualTo(LoanPhase.UNDERPERFORMING);
         assertThat(stage2.provisionAmount()).isEqualByComparingTo(CreditRisk.expectedCreditLoss(
-                LoanType.BUSINESS, LoanPhase.UNDERPERFORMING, stage2.outstandingPrincipal(), 60, false));
+                LoanType.BUSINESS, CreditRisk.productDefaultProbability(LoanType.BUSINESS), LoanPhase.UNDERPERFORMING, stage2.outstandingPrincipal(), 60, false));
         assertThat(stage2.provisionAmount()).isGreaterThan(CreditRisk.expectedCreditLoss(
-                LoanType.BUSINESS, LoanPhase.PERFORMING, stage2.outstandingPrincipal(), 60, false));
+                LoanType.BUSINESS, CreditRisk.productDefaultProbability(LoanType.BUSINESS), LoanPhase.PERFORMING, stage2.outstandingPrincipal(), 60, false));
 
         stagingService.evaluateLoan(loan.id(), due.plusDays(90), false);
         LoanAccount defaulted = loanService.findById(loan.id());
@@ -137,7 +138,7 @@ class LoanStagingServiceTest extends PostgresIntegrationTest {
         assertThat(cured.phase()).isEqualTo(LoanPhase.PERFORMING);
         assertThat(cured.probationStartDate()).isNull();
         assertThat(cured.provisionAmount()).isEqualByComparingTo(CreditRisk.expectedCreditLoss(
-                LoanType.BUSINESS, LoanPhase.PERFORMING, cured.outstandingPrincipal(), CreditRisk.remainingMonths(cured), false));
+                LoanType.BUSINESS, CreditRisk.productDefaultProbability(LoanType.BUSINESS), LoanPhase.PERFORMING, cured.outstandingPrincipal(), CreditRisk.remainingMonths(cured), false));
         assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
     }
 
@@ -189,13 +190,13 @@ class LoanStagingServiceTest extends PostgresIntegrationTest {
         try {
             stagingService.remeasureAll(date, true);
             assertThat(loanService.findById(loan.id()).provisionAmount()).isEqualByComparingTo(CreditRisk.expectedCreditLoss(
-                    LoanType.BUSINESS, LoanPhase.PERFORMING, new BigDecimal("100000.00"), 60, true));
+                    LoanType.BUSINESS, CreditRisk.productDefaultProbability(LoanType.BUSINESS), LoanPhase.PERFORMING, new BigDecimal("100000.00"), 60, true));
             assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
         } finally {
             stagingService.remeasureAll(date, false);
         }
         assertThat(loanService.findById(loan.id()).provisionAmount()).isEqualByComparingTo(CreditRisk.expectedCreditLoss(
-                LoanType.BUSINESS, LoanPhase.PERFORMING, new BigDecimal("100000.00"), 60, false));
+                LoanType.BUSINESS, CreditRisk.productDefaultProbability(LoanType.BUSINESS), LoanPhase.PERFORMING, new BigDecimal("100000.00"), 60, false));
         assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
     }
 }

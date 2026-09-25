@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useEventFeedStore } from '../stores/eventFeed'
-import { formatCurrency, formatDateTime } from '../utils/format'
+import { formatCurrency, formatDateTime, formatPercent } from '../utils/format'
 
 const feed = useEventFeedStore()
 
@@ -26,8 +26,10 @@ interface DayRolledOverPayload {
 }
 interface LoanOriginatedPayload {
   loanId: number
-  loanType: 'MORTGAGE' | 'CONSUMER'
+  loanType: 'MORTGAGE' | 'CONSUMER' | 'BUSINESS'
   principal: number
+  annualRate: number
+  creditGrade: 'A' | 'B' | 'C' | 'D' | 'E' | null
 }
 interface LoanWrittenOffPayload {
   loanId: number
@@ -63,8 +65,12 @@ function describe(type: string, payload: unknown): { text: string; tone: 'credit
     }
     case 'LOAN_ORIGINATED': {
       const p = payload as LoanOriginatedPayload
-      const label = p.loanType === 'MORTGAGE' ? 'Mortgage' : 'Consumer loan'
-      return { text: `${label} of ${formatCurrency(p.principal)} originated (loan ${p.loanId})`, tone: 'debit' }
+      const label = { MORTGAGE: 'Mortgage', CONSUMER: 'Consumer loan', BUSINESS: 'Business loan' }[p.loanType]
+      const grade = p.creditGrade ? `grade ${p.creditGrade}, ` : ''
+      return {
+        text: `${label} of ${formatCurrency(p.principal)} originated at ${formatPercent(p.annualRate)} (${grade}loan ${p.loanId})`,
+        tone: 'debit',
+      }
     }
     case 'LOAN_REPAID': {
       const p = payload as LoanRepaidPayload

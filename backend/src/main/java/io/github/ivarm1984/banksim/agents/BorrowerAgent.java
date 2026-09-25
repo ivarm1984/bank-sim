@@ -24,12 +24,16 @@ import io.github.ivarm1984.banksim.loan.LoanType;
  * drive the loan's IFRS 9 stage - see {@code loan.LoanStagingService})
  * build up and clear from real payment behaviour. Arrears come from two
  * sources: plain insufficient funds, and <em>payment distress</em> - each
- * loan independently enters distress on a daily roll derived from its
- * product's 12-month PD (higher during a recession), stops paying while
+ * loan independently enters distress on a daily roll derived from its own
+ * 12-month PD (set at origination from the product, the borrower's credit
+ * grade and debt service to income; higher during a recession), stops paying while
  * distressed, and leaves distress on a daily recovery roll. A distress spell
  * outlasting ~90 days of arrears is a default; a shorter one cures. A loan
  * that stays in default long enough is written off by the bank, freeing the
  * slot for a new loan of that type (a mortgage is still once ever).
+ *
+ * <p>Underwriting may decline a loan (unaffordable, or riskier than the CEO's
+ * approval cutoff) - the agent just rolls again another day.
  */
 public class BorrowerAgent implements Agent {
 
@@ -135,7 +139,7 @@ public class BorrowerAgent implements Agent {
             slot.open(loan);
             return true;
         } catch (RuntimeException e) {
-            // Throttled or otherwise rejected - roll again another day.
+            // Throttled, declined by underwriting, or otherwise rejected - roll again another day.
             return false;
         }
     }
@@ -152,6 +156,7 @@ public class BorrowerAgent implements Agent {
         private final LoanType type;
         private Long loanId;
         private BigDecimal installmentAmount;
+        private BigDecimal probabilityOfDefault;
         /** Due date of the oldest unpaid installment - same iterative {@code plusMonths(1)} walk as the loan's own schedule. */
         private LocalDate nextDueDate;
         private LocalDate lastPaymentAttemptOn;
@@ -164,6 +169,7 @@ public class BorrowerAgent implements Agent {
         private void open(LoanAccount loan) {
             loanId = loan.id();
             installmentAmount = loan.installmentAmount();
+            probabilityOfDefault = loan.probabilityOfDefault();
             nextDueDate = loan.originationDate().plusMonths(1);
             lastPaymentAttemptOn = null;
             distressed = false;
@@ -177,7 +183,7 @@ public class BorrowerAgent implements Agent {
                 distressed = distressRandom.nextDouble() >= DISTRESS_RECOVERY_DAILY_PROBABILITY;
                 return;
             }
-            double annualPd = CreditRisk.twelveMonthDefaultProbability(type, recessionActive).doubleValue();
+            double annualPd = CreditRisk.twelveMonthDefaultProbability(probabilityOfDefault, recessionActive).doubleValue();
             double dailyEntry = 1 - Math.pow(1 - Math.min(0.99, annualPd * DISTRESS_ENTRY_PD_MULTIPLE), 1.0 / 365);
             distressed = distressRandom.nextDouble() < dailyEntry;
         }

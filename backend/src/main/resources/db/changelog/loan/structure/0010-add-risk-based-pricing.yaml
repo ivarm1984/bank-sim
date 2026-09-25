@@ -1,0 +1,106 @@
+databaseChangeLog:
+  - changeSet:
+      id: loan-0010-add-risk-based-pricing
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: loan
+            tableName: loans
+            columns:
+              - column:
+                  # The borrower's baseline (through-the-cycle) 12-month PD,
+                  # fixed at origination from product x credit grade x DSTI -
+                  # see loan.CreditRisk. Drives the loan's ECL and how often
+                  # its borrower gets into payment distress; the recession
+                  # multiplier is applied on top at use, never stored.
+                  name: probability_of_default
+                  type: numeric(9,6)
+                  constraints:
+                    nullable: true
+        # Loans that predate risk-based pricing keep their product's baseline PD.
+        - sql:
+            sql: >-
+              UPDATE loan.loans SET probability_of_default = CASE loan_type
+                WHEN 'MORTGAGE' THEN 0.005
+                WHEN 'CONSUMER' THEN 0.025
+                ELSE 0.015 END;
+        - addNotNullConstraint:
+            schemaName: loan
+            tableName: loans
+            columnName: probability_of_default
+            columnDataType: numeric(9,6)
+        - createTable:
+            schemaName: loan
+            tableName: loan_pricing
+            columns:
+              - column:
+                  name: loan_id
+                  type: bigint
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    references: loan.loans(id)
+                    foreignKeyName: fk_loan_pricing_loan
+              - column:
+                  # Copied from customer.customers at origination (no
+                  # cross-schema FK, see AGENTS.md) - the grade can't change
+                  # the loan's price after the fact.
+                  name: credit_grade
+                  type: varchar(1)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: monthly_income
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # All the customer's installments including this loan's /
+                  # monthly income.
+                  name: debt_service_to_income
+                  type: numeric(9,6)
+                  constraints:
+                    nullable: false
+              - column:
+                  # The PD the loan was priced and approved on - the baseline
+                  # PD, scaled up if a recession was active on the day.
+                  name: pricing_probability_of_default
+                  type: numeric(9,6)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: policy_rate
+                  type: numeric(9,6)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Operating cost + profit margin per product.
+                  name: base_margin
+                  type: numeric(9,6)
+                  constraints:
+                    nullable: false
+              - column:
+                  # PD x LGD - the annual expected loss.
+                  name: expected_loss_spread
+                  type: numeric(9,6)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Risk weight x capital requirement x hurdle rate - the cost
+                  # of the equity the loan ties up.
+                  name: capital_spread
+                  type: numeric(9,6)
+                  constraints:
+                    nullable: false
+              - column:
+                  # The CEO's per-product spread lever at origination.
+                  name: spread_adjustment
+                  type: numeric(9,6)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Floored at zero - the loan's annual_rate.
+                  name: annual_rate
+                  type: numeric(9,6)
+                  constraints:
+                    nullable: false

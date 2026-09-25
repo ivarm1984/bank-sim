@@ -5,6 +5,8 @@ export type LedgerAccountType = 'BANK_CASH' | 'INTEREST_EXPENSE' | 'FEE_INCOME' 
 export interface Customer {
   id: number
   fullName: string
+  creditGrade: 'A' | 'B' | 'C' | 'D' | 'E'
+  monthlyIncome: number
   createdAt: string
 }
 

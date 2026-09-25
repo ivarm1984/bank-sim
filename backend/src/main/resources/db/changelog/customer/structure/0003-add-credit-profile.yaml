@@ -1,0 +1,38 @@
+databaseChangeLog:
+  - changeSet:
+      id: customer-0003-add-credit-profile
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: customer
+            tableName: customers
+            columns:
+              - column:
+                  # Internal credit grade A (best) .. E (worst) - scales the
+                  # product's baseline PD at loan origination, see
+                  # loan.CreditRisk. Defaults to the middle grade for
+                  # customers created without a profile (REST, tests).
+                  name: credit_grade
+                  type: varchar(1)
+                  defaultValue: C
+                  constraints:
+                    nullable: false
+              - column:
+                  # Net monthly income - the denominator of the debt-service-
+                  # to-income ratio checked at loan origination, and what the
+                  # customer's SalaryAgent pays in.
+                  name: monthly_income
+                  type: numeric(19,4)
+                  defaultValueNumeric: 3000
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE customer.customers
+              ADD CONSTRAINT chk_customers_credit_grade
+              CHECK (credit_grade IN ('A', 'B', 'C', 'D', 'E'));
+        - sql:
+            sql: >-
+              ALTER TABLE customer.customers
+              ADD CONSTRAINT chk_customers_monthly_income
+              CHECK (monthly_income > 0);

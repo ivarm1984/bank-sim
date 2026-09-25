@@ -3,6 +3,7 @@ package io.github.ivarm1984.banksim.loan;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanInstallments.LOAN_INSTALLMENTS;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanPayments.LOAN_PAYMENTS;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanPhaseHistory.LOAN_PHASE_HISTORY;
+import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanPricing.LOAN_PRICING;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanWriteOffs.LOAN_WRITE_OFFS;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.Loans.LOANS;
 import static org.jooq.impl.DSL.field;
@@ -22,6 +23,8 @@ import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.springframework.stereotype.Repository;
 
+import io.github.ivarm1984.banksim.customer.CreditGrade;
+
 @Repository
 public class LoanRepository {
 
@@ -32,12 +35,13 @@ public class LoanRepository {
     }
 
     public LoanAccount insertLoan(
-            long customerId, long disbursementAccountId, LoanType loanType, BigDecimal principal, BigDecimal annualRate,
-            int termMonths, BigDecimal installmentAmount, LocalDate originationDate) {
+            long customerId, long disbursementAccountId, LoanType loanType, BigDecimal probabilityOfDefault,
+            BigDecimal principal, BigDecimal annualRate, int termMonths, BigDecimal installmentAmount, LocalDate originationDate) {
         var record = dsl.insertInto(LOANS)
                 .set(LOANS.CUSTOMER_ID, customerId)
                 .set(LOANS.DISBURSEMENT_ACCOUNT_ID, disbursementAccountId)
                 .set(LOANS.LOAN_TYPE, loanType.name())
+                .set(LOANS.PROBABILITY_OF_DEFAULT, probabilityOfDefault)
                 .set(LOANS.PRINCIPAL, principal)
                 .set(LOANS.ANNUAL_RATE, annualRate)
                 .set(LOANS.TERM_MONTHS, termMonths)
@@ -49,6 +53,43 @@ public class LoanRepository {
                 .returning()
                 .fetchOne();
         return toLoanAccount(record);
+    }
+
+    public void insertPricing(long loanId, LoanPricing pricing) {
+        dsl.insertInto(LOAN_PRICING)
+                .set(LOAN_PRICING.LOAN_ID, loanId)
+                .set(LOAN_PRICING.CREDIT_GRADE, pricing.creditGrade().name())
+                .set(LOAN_PRICING.MONTHLY_INCOME, pricing.monthlyIncome())
+                .set(LOAN_PRICING.DEBT_SERVICE_TO_INCOME, pricing.debtServiceToIncome())
+                .set(LOAN_PRICING.PRICING_PROBABILITY_OF_DEFAULT, pricing.pricingProbabilityOfDefault())
+                .set(LOAN_PRICING.POLICY_RATE, pricing.policyRate())
+                .set(LOAN_PRICING.BASE_MARGIN, pricing.baseMargin())
+                .set(LOAN_PRICING.EXPECTED_LOSS_SPREAD, pricing.expectedLossSpread())
+                .set(LOAN_PRICING.CAPITAL_SPREAD, pricing.capitalSpread())
+                .set(LOAN_PRICING.SPREAD_ADJUSTMENT, pricing.spreadAdjustment())
+                .set(LOAN_PRICING.ANNUAL_RATE, pricing.annualRate())
+                .execute();
+    }
+
+    /** Empty for loans originated before risk-based pricing ({@code loan-0010}). */
+    public Optional<LoanPricing> findPricingByLoanId(long loanId) {
+        return dsl.selectFrom(LOAN_PRICING)
+                .where(LOAN_PRICING.LOAN_ID.eq(loanId))
+                .fetchOptional()
+                .map(r -> new LoanPricing(
+                        CreditGrade.valueOf(r.getCreditGrade()), r.getMonthlyIncome(), r.getDebtServiceToIncome(),
+                        r.getPricingProbabilityOfDefault(), r.getPolicyRate(), r.getBaseMargin(), r.getExpectedLossSpread(),
+                        r.getCapitalSpread(), r.getSpreadAdjustment(), r.getAnnualRate()));
+    }
+
+    /** Sum of the fixed installments of all the customer's active loans - the existing debt service in their DSTI. */
+    public BigDecimal activeInstallmentsByCustomerId(long customerId) {
+        BigDecimal total = dsl.select(sum(LOANS.INSTALLMENT_AMOUNT))
+                .from(LOANS)
+                .where(LOANS.CUSTOMER_ID.eq(customerId))
+                .and(LOANS.STATUS.eq(LoanStatus.ACTIVE.name()))
+                .fetchOne(0, BigDecimal.class);
+        return total == null ? BigDecimal.ZERO : total;
     }
 
     public void insertInstallment(
@@ -348,6 +389,7 @@ public class LoanRepository {
                 record.getCustomerId(),
                 record.getDisbursementAccountId(),
                 LoanType.valueOf(record.getLoanType()),
+                record.getProbabilityOfDefault(),
                 record.getPrincipal(),
                 record.getAnnualRate(),
                 record.getTermMonths(),

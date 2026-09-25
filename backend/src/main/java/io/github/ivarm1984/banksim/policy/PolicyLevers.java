@@ -13,10 +13,9 @@ import org.springframework.stereotype.Component;
  * {@code clock.SimulationClock}'s {@code AtomicReference<Snapshot>} pattern:
  * pure in-memory state, no schema.
  *
- * <p>{@code underwritingLooseness} is deliberately not consumed by anything
- * yet - there is no credit-scoring/per-borrower risk system in this codebase
- * for it to act on (see TODO.md's "Complex additions" - "Credit risk
- * pricing"). It exists as a placeholder field for that future work.
+ * <p>{@code underwritingLooseness} (0..1) is the risk appetite: it sets the
+ * highest borrower PD {@code LoanService} still approves - see
+ * {@code loan.CreditRisk#maxApprovalDefaultProbability}.
  */
 @Component
 public class PolicyLevers {

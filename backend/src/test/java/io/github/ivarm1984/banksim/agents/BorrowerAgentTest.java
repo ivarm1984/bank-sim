@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import io.github.ivarm1984.banksim.PostgresIntegrationTest;
+import io.github.ivarm1984.banksim.TestCustomers;
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
 import io.github.ivarm1984.banksim.account.AccountType;
@@ -52,7 +53,7 @@ class BorrowerAgentTest extends PostgresIntegrationTest {
     }
 
     private Account openAccount() {
-        var customer = customerService.create("Test Borrower");
+        var customer = customerService.create(TestCustomers.affluent("Test Borrower"));
         return accountService.open(customer.id(), AccountType.CHECKING);
     }
 

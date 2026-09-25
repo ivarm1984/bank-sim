@@ -89,7 +89,7 @@ public class LoanStagingService {
         }
 
         BigDecimal newProvision = CreditRisk.expectedCreditLoss(
-                loan.loanType(), next.phase(), loan.outstandingPrincipal(), CreditRisk.remainingMonths(loan), recessionActive);
+                loan.loanType(), loan.probabilityOfDefault(), next.phase(), loan.outstandingPrincipal(), CreditRisk.remainingMonths(loan), recessionActive);
         BigDecimal delta = newProvision.subtract(loan.provisionAmount());
         Long journalEntryId = provisionPoster.post(
                 delta, "Loan " + loan.id() + " stage " + loan.phase() + " -> " + next.phase() + " ECL remeasurement");
@@ -120,7 +120,7 @@ public class LoanStagingService {
         BigDecimal netDelta = BigDecimal.ZERO;
         for (LoanAccount loan : loans) {
             BigDecimal ecl = CreditRisk.expectedCreditLoss(
-                    loan.loanType(), loan.phase(), loan.outstandingPrincipal(), CreditRisk.remainingMonths(loan), recessionActive);
+                    loan.loanType(), loan.probabilityOfDefault(), loan.phase(), loan.outstandingPrincipal(), CreditRisk.remainingMonths(loan), recessionActive);
             BigDecimal delta = ecl.subtract(loan.provisionAmount());
             if (delta.signum() != 0) {
                 changed.put(loan.id(), ecl);

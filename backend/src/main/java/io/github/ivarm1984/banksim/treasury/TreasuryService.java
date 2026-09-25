@@ -22,6 +22,7 @@ import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerService;
 import io.github.ivarm1984.banksim.loan.CreditExposure;
 import io.github.ivarm1984.banksim.loan.LoanExposureService;
+import io.github.ivarm1984.banksim.loan.LoanType;
 import io.github.ivarm1984.banksim.policy.PolicyLevers;
 
 /**
@@ -312,7 +313,12 @@ public class TreasuryService {
                     ? DEFAULTED_UNDER_PROVISIONED_RISK_WEIGHT
                     : DEFAULTED_PROVISIONED_RISK_WEIGHT;
         }
-        return switch (exposure.loanType()) {
+        return performingRiskWeight(exposure.loanType());
+    }
+
+    /** A non-defaulted exposure's risk weight - also what {@code loan.RiskBasedPricing} charges capital on. */
+    public static BigDecimal performingRiskWeight(LoanType loanType) {
+        return switch (loanType) {
             case MORTGAGE -> MORTGAGE_RISK_WEIGHT;
             case CONSUMER -> RETAIL_RISK_WEIGHT;
             case BUSINESS -> CORPORATE_RISK_WEIGHT;

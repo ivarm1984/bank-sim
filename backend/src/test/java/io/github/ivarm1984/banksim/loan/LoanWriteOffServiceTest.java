@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import io.github.ivarm1984.banksim.PostgresIntegrationTest;
+import io.github.ivarm1984.banksim.TestCustomers;
 import io.github.ivarm1984.banksim.account.Account;
 import io.github.ivarm1984.banksim.account.AccountService;
 import io.github.ivarm1984.banksim.account.AccountType;
@@ -43,7 +44,7 @@ class LoanWriteOffServiceTest extends PostgresIntegrationTest {
     private LedgerReconciliationService reconciliationService;
 
     private LoanAccount originate(LoanType type, BigDecimal principal, int termMonths) {
-        Customer customer = customerService.create("Test Write-off Borrower");
+        Customer customer = customerService.create(TestCustomers.affluent("Test Write-off Borrower"));
         Account account = accountService.open(customer.id(), AccountType.CHECKING);
         return loanService.originateAndDisburse(account.customerId(), account.id(), type, principal, termMonths);
     }

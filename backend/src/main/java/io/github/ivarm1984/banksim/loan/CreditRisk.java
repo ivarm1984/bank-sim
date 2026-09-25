@@ -5,13 +5,22 @@ import java.math.MathContext;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 
+import io.github.ivarm1984.banksim.customer.CreditGrade;
+
 /**
  * Credit-risk parameters and the pure IFRS 9 staging/expected-credit-loss
  * math, shared by {@link LoanStagingService} (daily staging, macro
- * remeasurement), {@link LoanService} (provision at origination and after
- * each repayment) and {@code agents.BorrowerAgent} (how often borrowers get
- * into payment difficulty). Every figure is an illustrative constant in the
- * right ballpark for an EU retail/SME book, not a calibrated model.
+ * remeasurement), {@link LoanService} (PD and approval at origination,
+ * provision at origination and after each repayment) and
+ * {@code agents.BorrowerAgent} (how often borrowers get into payment
+ * difficulty). Every figure is an illustrative constant in the right
+ * ballpark for an EU retail/SME book, not a calibrated model.
+ *
+ * <p>Each loan carries its own baseline 12-month PD, fixed at origination:
+ * the product's baseline PD x the borrower's {@link CreditGrade} multiplier x
+ * a debt-service-to-income (DSTI) multiplier - see
+ * {@link #borrowerDefaultProbability}. A borrower whose DSTI would exceed
+ * {@link #MAX_DEBT_SERVICE_TO_INCOME} is declined outright.
  *
  * <p>ECL = PD x LGD x EAD, with EAD = outstanding principal:
  * <ul>
@@ -42,19 +51,87 @@ public final class CreditRisk {
     /** Forward-looking IFRS 9 adjustment applied to every PD while a recession is active. */
     static final BigDecimal RECESSION_PD_MULTIPLIER = new BigDecimal("3");
 
+    /**
+     * Hard affordability limit: all the borrower's installments, this loan's
+     * included, may take at most this share of monthly income - whatever the
+     * CEO's risk appetite. Several EU countries set borrower-based DSTI
+     * limits of this kind as a macroprudential measure (typically 40-60%).
+     */
+    static final BigDecimal MAX_DEBT_SERVICE_TO_INCOME = new BigDecimal("0.60");
+
+    /** No borrower is ever rated worse than this 12-month PD. */
+    static final BigDecimal MAX_DEFAULT_PROBABILITY = new BigDecimal("0.50");
+
+    /*
+     * The underwriting cutoff: the CEO's underwritingLooseness lever (0..1)
+     * maps linearly onto the highest PD still approved - 2% (only the best
+     * borrowers) at 0, 30% (nearly everyone) at 1, 16% at the default 0.5.
+     */
+    static final BigDecimal MIN_APPROVAL_DEFAULT_PROBABILITY = new BigDecimal("0.02");
+    static final BigDecimal MAX_APPROVAL_DEFAULT_PROBABILITY = new BigDecimal("0.30");
+
     private static final BigDecimal MONTHS_PER_YEAR = new BigDecimal("12");
+    private static final int PD_SCALE = 6;
 
     private CreditRisk() {
     }
 
-    /** Baseline 12-month probability of default by product. */
-    public static BigDecimal twelveMonthDefaultProbability(LoanType type, boolean recessionActive) {
-        BigDecimal baseline = switch (type) {
+    /** Baseline 12-month probability of default by product - an average (grade C, low DSTI) borrower. */
+    static BigDecimal productDefaultProbability(LoanType type) {
+        return switch (type) {
             case MORTGAGE -> new BigDecimal("0.005");
             case CONSUMER -> new BigDecimal("0.025");
             case BUSINESS -> new BigDecimal("0.015");
         };
-        return recessionActive ? baseline.multiply(RECESSION_PD_MULTIPLIER) : baseline;
+    }
+
+    /** How much riskier (or safer) than an average borrower each grade is. */
+    static BigDecimal gradeMultiplier(CreditGrade grade) {
+        return switch (grade) {
+            case A -> new BigDecimal("0.4");
+            case B -> new BigDecimal("0.7");
+            case C -> BigDecimal.ONE;
+            case D -> new BigDecimal("1.8");
+            case E -> new BigDecimal("3.0");
+        };
+    }
+
+    /**
+     * The more of their income a borrower already owes, the less room they
+     * have to absorb a shock - PD rises in bands of debt service to income.
+     */
+    static BigDecimal debtServiceToIncomeMultiplier(BigDecimal debtServiceToIncome) {
+        if (debtServiceToIncome.compareTo(new BigDecimal("0.30")) <= 0) {
+            return BigDecimal.ONE;
+        }
+        if (debtServiceToIncome.compareTo(new BigDecimal("0.40")) <= 0) {
+            return new BigDecimal("1.5");
+        }
+        if (debtServiceToIncome.compareTo(new BigDecimal("0.50")) <= 0) {
+            return new BigDecimal("2.5");
+        }
+        return new BigDecimal("4.0");
+    }
+
+    /** A borrower's baseline 12-month PD for one loan: product x grade x DSTI, capped at {@link #MAX_DEFAULT_PROBABILITY}. */
+    static BigDecimal borrowerDefaultProbability(LoanType type, CreditGrade grade, BigDecimal debtServiceToIncome) {
+        return productDefaultProbability(type)
+                .multiply(gradeMultiplier(grade))
+                .multiply(debtServiceToIncomeMultiplier(debtServiceToIncome))
+                .min(MAX_DEFAULT_PROBABILITY)
+                .setScale(PD_SCALE, RoundingMode.HALF_UP);
+    }
+
+    /** A loan's baseline 12-month PD, scaled up while a recession is active. */
+    public static BigDecimal twelveMonthDefaultProbability(BigDecimal baselinePd, boolean recessionActive) {
+        BigDecimal pd = recessionActive ? baselinePd.multiply(RECESSION_PD_MULTIPLIER) : baselinePd;
+        return pd.min(BigDecimal.ONE);
+    }
+
+    /** The highest (recession-adjusted) PD approved at {@code underwritingLooseness} - see the cutoff constants. */
+    static BigDecimal maxApprovalDefaultProbability(BigDecimal underwritingLooseness) {
+        BigDecimal range = MAX_APPROVAL_DEFAULT_PROBABILITY.subtract(MIN_APPROVAL_DEFAULT_PROBABILITY);
+        return MIN_APPROVAL_DEFAULT_PROBABILITY.add(range.multiply(underwritingLooseness)).setScale(PD_SCALE, RoundingMode.HALF_UP);
     }
 
     /**
@@ -72,11 +149,12 @@ public final class CreditRisk {
 
     /** Pure IFRS 9 ECL for one loan - see the class docs. */
     static BigDecimal expectedCreditLoss(
-            LoanType type, LoanPhase phase, BigDecimal outstandingPrincipal, int remainingMonths, boolean recessionActive) {
+            LoanType type, BigDecimal baselinePd, LoanPhase phase, BigDecimal outstandingPrincipal, int remainingMonths,
+            boolean recessionActive) {
         if (outstandingPrincipal.signum() <= 0) {
             return BigDecimal.ZERO.setScale(2);
         }
-        BigDecimal pd12 = twelveMonthDefaultProbability(type, recessionActive).min(BigDecimal.ONE);
+        BigDecimal pd12 = twelveMonthDefaultProbability(baselinePd, recessionActive);
         BigDecimal pd = switch (phase) {
             case PERFORMING -> pd12;
             case UNDERPERFORMING -> lifetimeDefaultProbability(pd12, remainingMonths);
