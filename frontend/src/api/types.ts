@@ -98,6 +98,9 @@ export interface TreasuryRatioSnapshot {
   requiredReserves: number | null
   reserveCoverageRatio: number | null
   capitalAdequacyRatio: number | null
+  riskWeightedAssets: number
+  /** Average annual return on equity since the epoch; null on day one. */
+  returnOnEquity: number | null
   createdAt: string
 }
 
@@ -107,7 +110,12 @@ export interface BankHealthSnapshot {
   id: number
   snapshotDate: string
   status: BankHealthStatus
+  /** Consecutive days below OCR (into the combined buffer). */
   capitalBreachStreak: number
+  /** Consecutive days below TSCR (failing or likely to fail). */
+  capitalShortfallStreak: number
+  /** Consecutive days with NSFR below 100%. */
+  fundingBreachStreak: number
   liquidityBreachStreak: number
   createdAt: string
 }

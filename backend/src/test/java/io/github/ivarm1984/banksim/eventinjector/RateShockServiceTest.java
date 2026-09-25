@@ -28,33 +28,30 @@ class RateShockServiceTest extends PostgresIntegrationTest {
         return CentralBankRateSchedule.clamp(schedule.ratesOn(date).policyRate().add(service.offsetAsOf(date)));
     }
 
-    /** Rolls succeed (below any probability) and always picks the "hike" branch (nextBoolean true). */
-    private static Random alwaysTriggersAHike() {
+    /** First roll triggers a shock (0.0 is under DAILY_PROBABILITY); every later roll is {@code directionRoll}. */
+    private static Random triggersWithDirectionRoll(double directionRoll) {
         return new Random() {
-            @Override
-            public double nextDouble() {
-                return 0.0;
-            }
+            private boolean first = true;
 
             @Override
-            public boolean nextBoolean() {
-                return true;
+            public double nextDouble() {
+                if (first) {
+                    first = false;
+                    return 0.0;
+                }
+                return directionRoll;
             }
         };
     }
 
-    private static Random alwaysTriggersACut() {
-        return new Random() {
-            @Override
-            public double nextDouble() {
-                return 0.0;
-            }
+    /** Direction roll 0.0 is under every hike probability. */
+    private static Random alwaysTriggersAHike() {
+        return triggersWithDirectionRoll(0.0);
+    }
 
-            @Override
-            public boolean nextBoolean() {
-                return false;
-            }
-        };
+    /** Direction roll just under 1 is above every hike probability. */
+    private static Random alwaysTriggersACut() {
+        return triggersWithDirectionRoll(0.999999);
     }
 
     private static Random neverTriggers() {
@@ -76,7 +73,7 @@ class RateShockServiceTest extends PostgresIntegrationTest {
         repository.insert(date, schedule.ratesOn(date).policyRate().add(service.offsetAsOf(date)).negate().subtract(BigDecimal.ONE));
         assertThat(effectiveRate(service, date)).isEqualByComparingTo(CentralBankRateSchedule.MIN_POLICY_RATE);
 
-        service.maybeTriggerShock(date);
+        service.maybeTriggerShock(date, false);
 
         assertThat(effectiveRate(service, date))
                 .isEqualByComparingTo(CentralBankRateSchedule.MIN_POLICY_RATE.add(RateShockService.SHOCK_MAGNITUDE));
@@ -95,7 +92,7 @@ class RateShockServiceTest extends PostgresIntegrationTest {
         repository.insert(date, CentralBankRateSchedule.MAX_POLICY_RATE.subtract(base).subtract(service.offsetAsOf(date)).add(BigDecimal.ONE));
         assertThat(effectiveRate(service, date)).isEqualByComparingTo(CentralBankRateSchedule.MAX_POLICY_RATE);
 
-        service.maybeTriggerShock(date);
+        service.maybeTriggerShock(date, false);
 
         BigDecimal expected = CentralBankRateSchedule.MAX_POLICY_RATE.subtract(RateShockService.SHOCK_MAGNITUDE);
         assertThat(effectiveRate(service, date)).isEqualByComparingTo(expected);
@@ -109,7 +106,7 @@ class RateShockServiceTest extends PostgresIntegrationTest {
         LocalDate date = LocalDate.of(2088, 3, 1);
         BigDecimal offsetBefore = service.offsetAsOf(date);
 
-        service.maybeTriggerShock(date);
+        service.maybeTriggerShock(date, false);
 
         assertThat(service.offsetAsOf(date)).isEqualByComparingTo(offsetBefore);
     }
@@ -130,5 +127,28 @@ class RateShockServiceTest extends PostgresIntegrationTest {
 
         List<RateShock> history = service.history();
         assertThat(history).extracting(RateShock::shockDate).contains(day1, day2);
+    }
+
+    /**
+     * The same direction roll that hikes outside a recession cuts during one -
+     * recessions bring ECB cuts, expansions lean towards hikes.
+     */
+    @Test
+    void aRecessionBiasesTheShockTowardsACut() {
+        double roll = (RateShockService.HIKE_PROBABILITY_IN_RECESSION + RateShockService.HIKE_PROBABILITY_OUTSIDE_RECESSION) / 2;
+        LocalDate expansionDay = LocalDate.of(2085, 3, 1);
+        LocalDate recessionDay = LocalDate.of(2085, 3, 2);
+        // Pin to the middle of the corridor so neither bound can swallow the move.
+        BigDecimal mid = CentralBankRateSchedule.MAX_POLICY_RATE.divide(new BigDecimal("2"));
+        RateShockService probe = new RateShockService(repository, schedule, events, neverTriggers());
+        repository.insert(expansionDay, mid.subtract(schedule.ratesOn(expansionDay).policyRate()).subtract(probe.offsetAsOf(expansionDay)));
+
+        BigDecimal before = effectiveRate(probe, expansionDay);
+        new RateShockService(repository, schedule, events, triggersWithDirectionRoll(roll)).maybeTriggerShock(expansionDay, false);
+        assertThat(effectiveRate(probe, expansionDay)).isEqualByComparingTo(before.add(RateShockService.SHOCK_MAGNITUDE));
+
+        BigDecimal beforeRecessionShock = effectiveRate(probe, recessionDay);
+        new RateShockService(repository, schedule, events, triggersWithDirectionRoll(roll)).maybeTriggerShock(recessionDay, true);
+        assertThat(effectiveRate(probe, recessionDay)).isEqualByComparingTo(beforeRecessionShock.subtract(RateShockService.SHOCK_MAGNITUDE));
     }
 }

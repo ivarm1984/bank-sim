@@ -26,6 +26,8 @@ public record TreasuryRatioSnapshot(
         BigDecimal requiredReserves,
         BigDecimal reserveCoverageRatio,
         BigDecimal capitalAdequacyRatio,
+        BigDecimal riskWeightedAssets,
+        BigDecimal returnOnEquity,
         OffsetDateTime createdAt) {
 
     /** Gross loans receivable less the loan-loss provision contra-asset. */

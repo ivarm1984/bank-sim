@@ -901,7 +901,7 @@ committed and verified on their own) and CEO.5b (EU logic).
   errors; `GET /api/treasury/ratios` included `loanLossProvision`;
   `GET /api/ledger/trial-balance` stayed balanced
 
-#### CEO.5b — EU-banking logic
+#### CEO.5b — EU-banking logic ✅ done
 Design calls made via `AskUserQuestion`:
 (1) delinquency is **payment-driven days-past-due** for every loan type:
 `BorrowerAgent` misses installments on a roll that rises in a recession;
@@ -912,7 +912,7 @@ conservation buffer = OCR 12.5%. Below OCR for 5 days → `WARNING` (MDA);
 below TSCR for 10 days → `GAME_OVER` (FOLTF); the CEO's buffer only throttles
 lending. (3) Winning also requires an average annual **ROE ≥ 5%**.
 
-- [ ] Game over is judged against the CEO's own buffer, not the regulatory
+- [x] Game over is judged against the CEO's own buffer, not the regulatory
       minimum: `isCapitalBreach` adds `targetCapitalBuffer` to the thresholds and
       `BankHealthService` counts that throttle as a regulatory breach - so a *more*
       prudent CEO reaches `GAME_OVER` sooner. Throttle on the management target,
@@ -921,51 +921,127 @@ lending. (3) Winning also requires an average annual **ROE ≥ 5%**.
       Breaching the combined buffer → MDA restrictions (CRD Art. 141) = `WARNING`;
       breaching the total requirement → failing-or-likely-to-fail (BRRD Art. 32) =
       `GAME_OVER`
-- [ ] NSFR is treated as a capital breach: NSFR is a structural funding/liquidity
+  - `TreasuryService` now holds the stack as constants: TSCR (P1 8% + P2R 2% =
+    10%) and OCR (TSCR + 2.5% CCB = 12.5%). The `targetCapitalBuffer` lever is
+    a management buffer on top of OCR and only throttles lending.
+    `TreasuryRatiosUpdatedEvent` now carries `capitalBelowOverallRequirement`/
+    `capitalBelowTotalSrepRequirement`/`fundingBreach` separately from
+    `loanOriginationThrottled`. `health_snapshots` gained
+    `capital_shortfall_streak`/`funding_breach_streak` (`bankhealth-0003`).
+    `capital_breach_streak` now counts days below OCR (5 → `WARNING`); the
+    shortfall streak counts days below TSCR (10 → `GAME_OVER`). Below OCR but
+    above TSCR never ends the game
+- [x] NSFR is treated as a capital breach: NSFR is a structural funding/liquidity
       ratio (CRR2 Art. 428b), not a resolution trigger the way a capital
       shortfall is; and adding the capital buffer to it as a flat % (2% buffer →
       NSFR ≥ 102%) mixes two unrelated concepts
-- [ ] Make the staging real IFRS 9 (ties into "Loan-loss provisioning" under
+  - NSFR < 100% still throttles lending (no stable funding for more long-term
+    loans), with no buffer added. It has its own streak (5 → `WARNING`) and
+    never ends the game on its own
+- [x] Make the staging real IFRS 9 (ties into "Loan-loss provisioning" under
       Complex additions): Stage 1 (performing) always carries a 12-month
       expected-credit-loss provision (not 0); Stage 2 lifetime ECL (not a flat
       10%); IFRS 9 covers every amortised-cost loan, so apply it to MORTGAGE/
       CONSUMER too and let recessions hit them; Stage 3 interest income recognised
       on the net carrying amount rather than full accrual
-- [ ] "Non-performing" contradicts the EU definition (ties into "Loan
+  - New `loan.CreditRisk` holds the per-product parameters: 12-month PD
+    (mortgage 0.5%, consumer 2.5%, business 1.5%, ×3 during a recession) and
+    LGD (15%/60%/45%). ECL = PD × LGD × EAD: Stage 1 uses the 12-month PD,
+    Stage 2 the lifetime PD `1 − (1 − PD12)^years` over the remaining term,
+    Stage 3 PD 1. `LoanPhase` stays as the stage (PERFORMING/UNDERPERFORMING/
+    NON_PERFORMING = 1/2/3) and now applies to every loan type. Every loan books
+    its Stage 1 allowance at disbursement, and it's remeasured after each
+    repayment. A recession starting or ending remeasures the whole book in one
+    net journal entry (`LoanStagingService.remeasureAll`, all active rows
+    locked). A Stage 3 repayment credits `INTEREST_INCOME` only with interest ×
+    the net-carrying-amount share; the rest is credited to `PROVISION_EXPENSE`
+    as an impairment gain
+- [x] "Non-performing" contradicts the EU definition (ties into "Loan
       default/delinquency simulation" under Complex additions): per CRR Art. 178 /
       EBA default guidelines / EBA NPE definition, a loan is non-performing when
       it's 90+ days past due or unlikely to pay - here a NON_PERFORMING loan keeps
       paying on time. Recovery is a 1%-per-day roll; EU rules require a minimum
       3-month probation before leaving default, 1 year for forborne exposures
-- [ ] Risk weights ignore credit quality: defaulted exposures should be
+  - `LoanPhaseTransitionService`'s random roll is replaced by
+    `LoanStagingService.evaluateDaily`. Days past due are derived from the due
+    date of installment `next_installment_number`, read for the whole book in
+    one query; only loans whose stage changes get locked and updated, one
+    transaction each. 30+ DPD → Stage 2, 90+ DPD → Stage 3. Leaving default
+    needs 3 months fully current (new `loans.probation_start_date`,
+    `loan-0008`); new arrears restart the clock. Forbearance isn't modeled.
+    `BorrowerAgent` now retries every overdue installment daily, oldest first
+    (misses are no longer forgiven), and each loan slot can enter *payment
+    distress* on a daily roll derived from its PD (×2.5, since many spells
+    cure before 90 DPD). While distressed it stops paying, and it recovers on
+    a 1/120 daily roll. Distress rolls use their own `Random` (a test seam)
+- [x] Risk weights ignore credit quality: defaulted exposures should be
       risk-weighted at 150% when specific provisions are under 20% (CRR Art. 127),
       and exposures should be net of specific credit risk adjustments (Art. 111).
       Pre-existing: mortgages are weighted at 100% instead of the standardised 35%
       for residential mortgages (Art. 125), which makes the bank look far more
       capital-constrained than a real retail bank
-- [ ] An unlimited central-bank facility makes liquidity failure impossible:
+  - RWA is built from the loan book (new `loan.LoanExposureService`, aggregated
+    per product × stage, net of allowances): mortgage 35%, consumer/retail
+    75% (Art. 123), business/unrated corporate 100% (Art. 122), defaulted 150%
+    under 20% provision coverage, otherwise 100%. Persisted as
+    `ratio_snapshots.risk_weighted_assets` (`treasury-0004`)
+- [x] An unlimited central-bank facility makes liquidity failure impossible:
       with `autoTapBorrowingFacility` on the bank can never fail on liquidity. ECB
       marginal lending requires eligible collateral with haircuts - cap draws by
       unencumbered eligible assets so a bank run is a real risk, not an opt-in
-- [ ] Rate shocks are independent of recessions: in the euro area recessions
+  - Draws are capped at non-defaulted loans × (1 − 30% credit-claim haircut),
+    less what's already drawn. Any shortfall beyond that persists, so the
+    liquidity streak (and `BANK_RUN`) can build with the lever on
+- [x] Rate shocks are independent of recessions: in the euro area recessions
       usually bring ECB cuts, and hikes come with inflation. Bias shock direction
       by recession state so margin compression coincides with credit losses
-- [ ] Winning ignores profitability: you can win at 5 years with zero lending and
+  - Hike probability is 20% during a recession and 60% outside one.
+    `EventInjectorScheduler` now ticks the recession first and passes its state
+    to the rate-shock roll
+- [x] Winning ignores profitability: you can win at 5 years with zero lending and
       zero profit. Add a requirement such as positive retained earnings or a
       minimum return on equity so "do nothing" isn't the winning strategy
+  - `WON` also needs an average annual ROE ≥ 5%: net income to date / paid-in
+    capital / years since epoch, persisted as `ratio_snapshots.return_on_equity`
+    and carried on `TreasuryRatiosUpdatedEvent`
+- Frontend: `BankHealthPanel` lists all four streaks; `TreasuryRatiosPanel`
+  shows CAR against "10% TSCR · 12.5% OCR" plus an ROE row; the buffer lever is
+  relabeled "Management buffer above 12.5% OCR"
+- Verify: `./gradlew test`: 109 tests pass, including new `CreditRiskTest`
+  (plain unit: DPD staging, probation, ECL), a rewritten `LoanStagingServiceTest`
+  (day-one ECL, 30/90-DPD staging with matching provisions, 3-month probation
+  cure, Stage 3 net interest + payoff release, recession remeasure up/down),
+  `RateShockServiceTest.aRecessionBiasesTheShockTowardsACut`,
+  `BorrowerAgentTest.aDistressedBorrowerMissesInstallmentsAndCatchesUpOnceRecovered`,
+  `TreasuryServiceTest` risk-weight/Art. 127/collateral-cap cases, and the
+  rewritten `BankHealthStatusTest` (TSCR/OCR/NSFR/ROE rules). `npm run build`
+  clean. Live (fresh dev DB, seed temporarily cut to 500 customers and the
+  recession start probability temporarily raised to 1%/day, both reverted
+  after): 450 simulated days. Consumer loans moved through Stage 2 into
+  default, 3 of them sat on probation, and the phase history showed 9
+  defaults / 11 Stage-2 entries / 6 cures. The recession start on 2027-02-26
+  remeasured the whole book (+116,168 provisions). Rate shocks moved −0.75%
+  net. RWA (8.9M) sat well below gross loans (12.3M) thanks to the 35%
+  mortgage weight. CAR was 15.35% against the 12.5% OCR, and ROE 29.8% (the
+  seed's small 1M capital base against 23M of largely zero-rate deposits).
+  The trial balance stayed balanced. The `/ceo` view rendered the new streak
+  and ROE rows
 
 ## Complex additions (deferred domain depth)
 
 Deliberately simplified in M6 above — revisit once the simple version works
 end-to-end.
 
-- [ ] Loan default/delinquency simulation: `BorrowerAgent` that can miss
+- [x] Loan default/delinquency simulation: `BorrowerAgent` that can miss
       payments (income shock, randomized), days-past-due tracking, non-performing
-      loan (NPL) classification and NPL ratio
+      loan (NPL) classification (done in CEO.5b)
+- [ ] NPL ratio (Stage 3 exposure / total loans) as a reported treasury figure
 - [ ] Credit risk pricing: risk-based spread per borrower (simple credit score
       or income/debt ratio at origination) instead of a flat spread
-- [ ] Loan-loss provisioning: provision expense posted against expected/actual
-      defaults (IFRS 9-style expected credit loss, simplified)
+- [x] Loan-loss provisioning: provision expense posted against expected/actual
+      defaults (IFRS 9-style expected credit loss, simplified; done in CEO.5b)
+- [ ] Write-offs: a defaulted loan that never cures stays on the book forever;
+      write it off against its allowance after some period in Stage 3
 - [ ] Full EU LCR breakdown: HQLA tiering (Level 1 / 2A / 2B, with haircuts) and
       CRR outflow/inflow categories instead of one aggregate liquidity number
 - [ ] Full NSFR breakdown: ASF (available stable funding) and RSF (required

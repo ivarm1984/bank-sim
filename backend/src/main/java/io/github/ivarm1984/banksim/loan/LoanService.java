@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
@@ -12,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import io.github.ivarm1984.banksim.centralbank.CentralBankService;
 import io.github.ivarm1984.banksim.clock.ClockService;
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
+import io.github.ivarm1984.banksim.eventinjector.RecessionShockService;
 import io.github.ivarm1984.banksim.ledger.EntryType;
 import io.github.ivarm1984.banksim.ledger.JournalEntryRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
@@ -66,11 +68,13 @@ public class LoanService {
     private final TreasuryService treasuryService;
     private final PolicyLevers policyLevers;
     private final LoanProvisionPoster provisionPoster;
+    private final RecessionShockService recessionShockService;
 
     public LoanService(
             LoanRepository loanRepository, LedgerService ledgerService, LedgerAccountService ledgerAccountService,
             CentralBankService centralBankService, ClockService clockService, DomainEventPublisher events,
-            TreasuryService treasuryService, PolicyLevers policyLevers, LoanProvisionPoster provisionPoster) {
+            TreasuryService treasuryService, PolicyLevers policyLevers, LoanProvisionPoster provisionPoster,
+            RecessionShockService recessionShockService) {
         this.loanRepository = loanRepository;
         this.ledgerService = ledgerService;
         this.ledgerAccountService = ledgerAccountService;
@@ -80,6 +84,7 @@ public class LoanService {
         this.treasuryService = treasuryService;
         this.policyLevers = policyLevers;
         this.provisionPoster = provisionPoster;
+        this.recessionShockService = recessionShockService;
     }
 
     /**
@@ -125,7 +130,12 @@ public class LoanService {
                 .anyMatch(loan -> loan.loanType() == LoanType.MORTGAGE);
     }
 
-    /** Posts the disbursement: Debit LOAN_RECEIVABLE, Credit the disbursement account's CUSTOMER_LIABILITY. */
+    /**
+     * Posts the disbursement (Debit LOAN_RECEIVABLE, Credit the disbursement
+     * account's CUSTOMER_LIABILITY) and the day-one Stage 1 loss allowance -
+     * under IFRS 9 every performing loan carries its 12-month ECL from the
+     * moment it's recognised.
+     */
     @Transactional
     public LoanAccount disburse(long loanId) {
         LoanAccount loan = loanRepository.findById(loanId);
@@ -137,6 +147,11 @@ public class LoanService {
                 List.of(
                         new LedgerLineRequest(loanReceivableId, EntryType.DEBIT, loan.principal()),
                         new LedgerLineRequest(liabilityId, EntryType.CREDIT, loan.principal()))));
+
+        BigDecimal initialProvision = CreditRisk.expectedCreditLoss(
+                loan.loanType(), LoanPhase.PERFORMING, loan.principal(), loan.termMonths(), recessionActiveToday());
+        provisionPoster.post(initialProvision, "Loan " + loanId + " initial Stage 1 ECL");
+        loanRepository.updateProvision(loanId, initialProvision);
 
         events.publish(new LoanOriginatedEvent(
                 loan.id(), loan.customerId(), loan.disbursementAccountId(), loan.loanType(), loan.principal(),
@@ -212,18 +227,28 @@ public class LoanService {
         long loanReceivableId = ledgerAccountService.findLoanReceivableAccount(loanId).id();
         long interestIncomeId = ledgerAccountService.getSingleton(LedgerAccountType.INTEREST_INCOME).id();
 
+        // IFRS 9 5.4.1(b): a credit-impaired (Stage 3) loan's interest revenue is
+        // recognised on its net carrying amount. The rest of what the borrower
+        // pays is a recovery against the loss allowance - credited to
+        // PROVISION_EXPENSE (an impairment gain) rather than interest income.
+        BigDecimal recognisedInterest = recognisedInterest(loan, interestDue);
+        BigDecimal impairmentGain = interestDue.subtract(recognisedInterest);
+
         Long journalEntryId = null;
         if (amountCharged.signum() > 0) {
-            journalEntryId = ledgerService.post(new JournalEntryRequest(
-                    "Repayment for loan " + loanId,
-                    List.of(
-                            new LedgerLineRequest(liabilityId, EntryType.DEBIT, amountCharged),
-                            new LedgerLineRequest(loanReceivableId, EntryType.CREDIT, principalPortion),
-                            new LedgerLineRequest(interestIncomeId, EntryType.CREDIT, interestDue))));
+            List<LedgerLineRequest> lines = new ArrayList<>(List.of(
+                    new LedgerLineRequest(liabilityId, EntryType.DEBIT, amountCharged),
+                    new LedgerLineRequest(loanReceivableId, EntryType.CREDIT, principalPortion),
+                    new LedgerLineRequest(interestIncomeId, EntryType.CREDIT, recognisedInterest)));
+            if (impairmentGain.signum() > 0) {
+                long provisionExpenseId = ledgerAccountService.getSingleton(LedgerAccountType.PROVISION_EXPENSE).id();
+                lines.add(new LedgerLineRequest(provisionExpenseId, EntryType.CREDIT, impairmentGain));
+            }
+            journalEntryId = ledgerService.post(new JournalEntryRequest("Repayment for loan " + loanId, lines));
         }
 
         loanRepository.updateAfterPayment(loanId, newOutstandingPrincipal, nextInstallmentNumber, newStatus);
-        remeasureProvision(loan, newOutstandingPrincipal, paidOff);
+        remeasureProvision(loan, newOutstandingPrincipal, nextInstallmentNumber, paidOff);
         LocalDate paymentDate = clockService.state().simulatedTime().toLocalDate();
         LoanPayment payment = loanRepository.insertPayment(
                 loanId, paymentDate, type, amountCharged, interestDue, principalPortion, newOutstandingPrincipal, journalEntryId);
@@ -232,16 +257,28 @@ public class LoanService {
         return payment;
     }
 
+    private static BigDecimal recognisedInterest(LoanAccount loan, BigDecimal interestDue) {
+        if (loan.phase() != LoanPhase.NON_PERFORMING || loan.outstandingPrincipal().signum() <= 0) {
+            return interestDue;
+        }
+        BigDecimal netCarryingShare = loan.outstandingPrincipal().subtract(loan.provisionAmount())
+                .divide(loan.outstandingPrincipal(), MathContext.DECIMAL64)
+                .max(BigDecimal.ZERO);
+        return interestDue.multiply(netCarryingShare).setScale(2, RoundingMode.HALF_UP);
+    }
+
     /**
-     * Keeps the loan-loss provision in step with the exposure it covers: a
-     * phase's provision rate applies to the *current* outstanding principal,
-     * so every repayment shrinks it (never leaving the contra-asset larger
-     * than the receivable), and a payoff releases whatever is left in full.
+     * Keeps the loss allowance in step with the exposure it covers: ECL is
+     * remeasured on the *new* outstanding principal and remaining term after
+     * every repayment (never leaving the contra-asset larger than the
+     * receivable), and a payoff releases whatever is left in full.
      */
-    private void remeasureProvision(LoanAccount loan, BigDecimal newOutstandingPrincipal, boolean paidOff) {
+    private void remeasureProvision(LoanAccount loan, BigDecimal newOutstandingPrincipal, int nextInstallmentNumber, boolean paidOff) {
+        int remainingMonths = Math.max(1, loan.termMonths() - (nextInstallmentNumber - 1));
         BigDecimal newProvision = paidOff
                 ? BigDecimal.ZERO
-                : LoanPhaseTransitionService.provisionAmount(loan.phase(), newOutstandingPrincipal);
+                : CreditRisk.expectedCreditLoss(
+                        loan.loanType(), loan.phase(), newOutstandingPrincipal, remainingMonths, recessionActiveToday());
         BigDecimal delta = newProvision.subtract(loan.provisionAmount());
         if (delta.signum() == 0) {
             return;
@@ -249,6 +286,10 @@ public class LoanService {
         provisionPoster.post(delta, "Loan " + loan.id() + " provision remeasured after repayment"
                 + (paidOff ? " (paid off - released in full)" : ""));
         loanRepository.updateProvision(loan.id(), newProvision);
+    }
+
+    private boolean recessionActiveToday() {
+        return recessionShockService.isActive(clockService.state().simulatedTime().toLocalDate());
     }
 
     public LoanAccount findById(long loanId) {

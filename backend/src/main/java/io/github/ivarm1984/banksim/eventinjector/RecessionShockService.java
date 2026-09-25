@@ -14,9 +14,10 @@ import org.springframework.transaction.annotation.Transactional;
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
 
 /**
- * Random recession windows - a temporary elevated-risk period that
- * {@code loan.LoanPhaseTransitionService} reads (via {@link #isActive}) to
- * raise BUSINESS loans' daily phase-downgrade probability. State is a
+ * Random recession windows - a temporary elevated-risk period. Read (via
+ * {@link #isActive}) by borrower agents, whose payment-difficulty rate rises,
+ * and by the IFRS 9 ECL calculation ({@code loan.CreditRisk}), whose
+ * forward-looking PDs rise with it. State is a
  * persisted start/end event log (see {@link RecessionEventRepository}), not
  * a boolean flag, so "active as of a date" stays a pure derived read.
  */

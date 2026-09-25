@@ -19,5 +19,6 @@ public record LoanAccount(
         LoanStatus status,
         LoanPhase phase,
         BigDecimal provisionAmount,
+        LocalDate probationStartDate,
         OffsetDateTime createdAt) {
 }

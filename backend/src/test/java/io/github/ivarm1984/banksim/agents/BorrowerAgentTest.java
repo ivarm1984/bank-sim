@@ -16,6 +16,7 @@ import io.github.ivarm1984.banksim.account.AccountService;
 import io.github.ivarm1984.banksim.account.AccountType;
 import io.github.ivarm1984.banksim.customer.CustomerService;
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
+import io.github.ivarm1984.banksim.eventinjector.RecessionShockService;
 import io.github.ivarm1984.banksim.loan.LoanAccount;
 import io.github.ivarm1984.banksim.loan.LoanService;
 import io.github.ivarm1984.banksim.loan.LoanStatus;
@@ -34,6 +35,11 @@ class BorrowerAgentTest extends PostgresIntegrationTest {
     private DomainEventPublisher events;
     @Autowired
     private LoanService loanService;
+    @Autowired
+    private RecessionShockService recessionShockService;
+
+    /** A roll above every probability the agent checks - for the distress generator, "never enters distress". */
+    private static final double NEVER = 0.999999;
 
     /** A Random whose every roll succeeds (or fails), regardless of the probability checked against it. */
     private static Random alwaysRolls(double value) {
@@ -53,8 +59,8 @@ class BorrowerAgentTest extends PostgresIntegrationTest {
     @Test
     void takesAMortgageAConsumerLoanAndABusinessLoanOnASuccessfulRollAndNeverTakesASecondMortgage() {
         Account account = openAccount();
-        AgentContext context = new AgentContext(transactionService, accountService, events, loanService);
-        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0));
+        AgentContext context = new AgentContext(transactionService, accountService, events, loanService, recessionShockService);
+        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0), alwaysRolls(NEVER));
 
         agent.onTick(LocalDateTime.of(2026, 1, 1, 9, 0), context);
         agent.onTick(LocalDateTime.of(2026, 1, 2, 9, 0), context);
@@ -83,8 +89,8 @@ class BorrowerAgentTest extends PostgresIntegrationTest {
     @Test
     void businessLoanSlotFreesUpOncePaidOffInFullAllowingAnotherToBeTaken() {
         Account account = openAccount();
-        AgentContext context = new AgentContext(transactionService, accountService, events, loanService);
-        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRollsAndPicksTheShortestTerm());
+        AgentContext context = new AgentContext(transactionService, accountService, events, loanService, recessionShockService);
+        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRollsAndPicksTheShortestTerm(), alwaysRolls(NEVER));
         transactionService.deposit(account.id(), new BigDecimal("50000.00"));
 
         LocalDateTime tick = LocalDateTime.of(2026, 1, 1, 9, 0);
@@ -110,8 +116,8 @@ class BorrowerAgentTest extends PostgresIntegrationTest {
     @Test
     void paysTheDueInstallmentOnTheDueDayReducingOutstandingPrincipal() {
         Account account = openAccount();
-        AgentContext context = new AgentContext(transactionService, accountService, events, loanService);
-        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0));
+        AgentContext context = new AgentContext(transactionService, accountService, events, loanService, recessionShockService);
+        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0), alwaysRolls(NEVER));
 
         agent.onTick(LocalDateTime.of(2026, 1, 1, 9, 0), context);
         LoanAccount consumerLoan = loanService.findByAccountId(account.id()).stream()
@@ -128,8 +134,8 @@ class BorrowerAgentTest extends PostgresIntegrationTest {
     @Test
     void insufficientFundsOnTheDueDayIsSkippedSilentlyAndLeavesTheLoanActive() {
         Account account = openAccount();
-        AgentContext context = new AgentContext(transactionService, accountService, events, loanService);
-        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0));
+        AgentContext context = new AgentContext(transactionService, accountService, events, loanService, recessionShockService);
+        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0), alwaysRolls(NEVER));
 
         agent.onTick(LocalDateTime.of(2026, 1, 1, 9, 0), context);
         LoanAccount consumerLoan = loanService.findByAccountId(account.id()).stream()
@@ -142,5 +148,41 @@ class BorrowerAgentTest extends PostgresIntegrationTest {
         LoanAccount reloaded = loanService.findById(consumerLoan.id());
         assertThat(reloaded.status()).isEqualTo(LoanStatus.ACTIVE);
         assertThat(reloaded.outstandingPrincipal()).isEqualByComparingTo(consumerLoan.outstandingPrincipal());
+    }
+
+    /**
+     * A distressed borrower stops paying, so the installment goes overdue;
+     * once distress ends the arrears are caught up, oldest first, in one go.
+     */
+    @Test
+    void aDistressedBorrowerMissesInstallmentsAndCatchesUpOnceRecovered() {
+        Account account = openAccount();
+        AgentContext context = new AgentContext(transactionService, accountService, events, loanService, recessionShockService);
+        double[] distressRoll = {NEVER};
+        Random distress = new Random() {
+            @Override
+            public double nextDouble() {
+                return distressRoll[0];
+            }
+        };
+        BorrowerAgent agent = new BorrowerAgent(account.customerId(), account.id(), alwaysRolls(0.0), distress);
+        agent.onTick(LocalDateTime.of(2026, 1, 1, 9, 0), context);
+        LoanAccount consumerLoan = loanService.findByAccountId(account.id()).stream()
+                .filter(l -> l.loanType() == LoanType.CONSUMER).findFirst().orElseThrow();
+        transactionService.deposit(account.id(), new BigDecimal("10000.00"));
+
+        // Enters distress (roll 0.0 is under the entry probability) and stays in it
+        // (0.0 is also under the recovery probability, so switch to NEVER to stay).
+        distressRoll[0] = 0.0;
+        agent.onTick(LocalDateTime.of(2026, 1, 20, 9, 0), context);
+        distressRoll[0] = NEVER;
+        agent.onTick(LocalDateTime.of(2026, 2, 1, 9, 0), context);
+        agent.onTick(LocalDateTime.of(2026, 3, 1, 9, 0), context);
+        assertThat(loanService.findById(consumerLoan.id()).nextInstallmentNumber()).isEqualTo(1);
+
+        // Recovers (a roll under the recovery probability), then pays both overdue installments.
+        distressRoll[0] = 0.0;
+        agent.onTick(LocalDateTime.of(2026, 3, 2, 9, 0), context);
+        assertThat(loanService.findById(consumerLoan.id()).nextInstallmentNumber()).isEqualTo(3);
     }
 }

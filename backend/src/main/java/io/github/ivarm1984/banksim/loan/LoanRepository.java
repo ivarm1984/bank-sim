@@ -4,10 +4,13 @@ import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanInstallments.LOAN
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanPayments.LOAN_PAYMENTS;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanPhaseHistory.LOAN_PHASE_HISTORY;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.Loans.LOANS;
+import static org.jooq.impl.DSL.sum;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 
 import org.jooq.DSLContext;
@@ -131,6 +134,88 @@ public class LoanRepository {
                 .execute();
     }
 
+    /** One active loan's staging inputs - see {@link #findActiveStagingInputs}. */
+    public record StagingInput(long loanId, LoanPhase phase, LocalDate probationStartDate, int daysPastDue) {
+    }
+
+    /**
+     * Every active loan's current stage plus its days past due as of {@code asOf}:
+     * days since the due date of the oldest unpaid installment (installment
+     * {@code next_installment_number}), 0 if that isn't due yet. One query for
+     * the whole book - the daily staging pass only locks the loans whose stage
+     * actually changes.
+     */
+    public List<StagingInput> findActiveStagingInputs(LocalDate asOf) {
+        return dsl.select(LOANS.ID, LOANS.PHASE, LOANS.PROBATION_START_DATE, LOAN_INSTALLMENTS.DUE_DATE)
+                .from(LOANS)
+                .leftJoin(LOAN_INSTALLMENTS)
+                .on(LOAN_INSTALLMENTS.LOAN_ID.eq(LOANS.ID))
+                .and(LOAN_INSTALLMENTS.INSTALLMENT_NUMBER.eq(LOANS.NEXT_INSTALLMENT_NUMBER))
+                .where(LOANS.STATUS.eq(LoanStatus.ACTIVE.name()))
+                .orderBy(LOANS.ID)
+                .fetch(r -> new StagingInput(
+                        r.get(LOANS.ID), LoanPhase.valueOf(r.get(LOANS.PHASE)), r.get(LOANS.PROBATION_START_DATE),
+                        daysPastDue(r.get(LOAN_INSTALLMENTS.DUE_DATE), asOf)));
+    }
+
+    /** Days past due for one loan - same definition as {@link #findActiveStagingInputs}. */
+    public int daysPastDue(LoanAccount loan, LocalDate asOf) {
+        LocalDate dueDate = dsl.select(LOAN_INSTALLMENTS.DUE_DATE)
+                .from(LOAN_INSTALLMENTS)
+                .where(LOAN_INSTALLMENTS.LOAN_ID.eq(loan.id()))
+                .and(LOAN_INSTALLMENTS.INSTALLMENT_NUMBER.eq(loan.nextInstallmentNumber()))
+                .fetchOne(LOAN_INSTALLMENTS.DUE_DATE);
+        return daysPastDue(dueDate, asOf);
+    }
+
+    private static int daysPastDue(LocalDate oldestUnpaidDueDate, LocalDate asOf) {
+        if (oldestUnpaidDueDate == null) {
+            return 0;
+        }
+        return (int) Math.max(0, ChronoUnit.DAYS.between(oldestUnpaidDueDate, asOf));
+    }
+
+    /** Locks every active loan row - used by the whole-book ECL remeasurement so it can't race a repayment's own remeasure. */
+    public List<LoanAccount> lockAllActiveForUpdate() {
+        return dsl.selectFrom(LOANS)
+                .where(LOANS.STATUS.eq(LoanStatus.ACTIVE.name()))
+                .orderBy(LOANS.ID)
+                .forUpdate()
+                .fetch()
+                .map(LoanRepository::toLoanAccount);
+    }
+
+    public void updateStaging(long loanId, LoanPhase phase, BigDecimal provisionAmount, LocalDate probationStartDate) {
+        dsl.update(LOANS)
+                .set(LOANS.PHASE, phase.name())
+                .set(LOANS.PROVISION_AMOUNT, provisionAmount)
+                .set(LOANS.PROBATION_START_DATE, probationStartDate)
+                .where(LOANS.ID.eq(loanId))
+                .execute();
+    }
+
+    public void batchUpdateProvisions(Map<Long, BigDecimal> provisionByLoanId) {
+        dsl.batch(provisionByLoanId.entrySet().stream()
+                        .map(e -> dsl.update(LOANS)
+                                .set(LOANS.PROVISION_AMOUNT, e.getValue())
+                                .where(LOANS.ID.eq(e.getKey())))
+                        .toList())
+                .execute();
+    }
+
+    /** Active book aggregated per product and stage - what treasury's credit-risk RWA and collateral figures are built from. */
+    public List<CreditExposure> activeExposuresByTypeAndPhase() {
+        var outstanding = sum(LOANS.OUTSTANDING_PRINCIPAL);
+        var provision = sum(LOANS.PROVISION_AMOUNT);
+        return dsl.select(LOANS.LOAN_TYPE, LOANS.PHASE, outstanding, provision)
+                .from(LOANS)
+                .where(LOANS.STATUS.eq(LoanStatus.ACTIVE.name()))
+                .groupBy(LOANS.LOAN_TYPE, LOANS.PHASE)
+                .fetch(r -> new CreditExposure(
+                        LoanType.valueOf(r.get(LOANS.LOAN_TYPE)), LoanPhase.valueOf(r.get(LOANS.PHASE)),
+                        r.get(outstanding), r.get(provision)));
+    }
+
     public void updateProvision(long loanId, BigDecimal provisionAmount) {
         dsl.update(LOANS)
                 .set(LOANS.PROVISION_AMOUNT, provisionAmount)
@@ -193,6 +278,7 @@ public class LoanRepository {
                 LoanStatus.valueOf(record.getStatus()),
                 LoanPhase.valueOf(record.getPhase()),
                 record.getProvisionAmount(),
+                record.getProbationStartDate(),
                 record.getCreatedAt());
     }
 

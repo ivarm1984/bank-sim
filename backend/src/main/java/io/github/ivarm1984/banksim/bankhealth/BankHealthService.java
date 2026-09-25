@@ -1,5 +1,6 @@
 package io.github.ivarm1984.banksim.bankhealth;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.NoSuchElementException;
@@ -12,25 +13,29 @@ import io.github.ivarm1984.banksim.event.DomainEventPublisher;
 import io.github.ivarm1984.banksim.treasury.TreasuryRatiosUpdatedEvent;
 
 /**
- * CEO-mode win/loss state machine, driven entirely by consecutive-day breach
- * streaks off {@link TreasuryRatiosUpdatedEvent} - deliberately simple (no
- * separate "episode" bookkeeping, no new borrowing-cap concept) so the rules
- * stay legible: two independent streak counters, each with a warning
- * threshold and a terminal threshold.
+ * CEO-mode win/loss state machine, driven by consecutive-day breach streaks
+ * off {@link TreasuryRatiosUpdatedEvent} - judged against the regulatory
+ * thresholds, never the CEO's own management buffer (that only throttles
+ * lending), so being more prudent can't make you lose sooner.
  *
  * <ul>
- *   <li>Capital breach (CAR/NSFR below minimum, i.e.
- *       {@code loanOriginationThrottled}) for {@value #WARNING_THRESHOLD_DAYS}
- *       consecutive days -> {@code WARNING}; the same streak reaching
- *       {@value #TERMINAL_THRESHOLD_DAYS} days -> {@code GAME_OVER}.</li>
- *   <li>Liquidity breach ({@code liquidityBreach}, uncorrected because the
- *       CEO's {@code autoTapBorrowingFacility} lever is off - with it on the
- *       feedback loop always fully repairs the ratio the same day) for
- *       {@value #TERMINAL_THRESHOLD_DAYS} consecutive days -> {@code
- *       BANK_RUN}.</li>
- *   <li>{@value #WIN_SURVIVAL_YEARS} simulated years survived since
- *       {@link SimulationClock#epoch()} with both streaks at zero (fully
- *       healthy) -> {@code WON}.</li>
+ *   <li>CAR below the overall capital requirement (OCR - into the combined
+ *       buffer, MDA restrictions under CRD Art. 141), NSFR below 100%, or
+ *       uncovered liquidity for {@value #WARNING_THRESHOLD_DAYS} consecutive
+ *       days -> {@code WARNING}.</li>
+ *   <li>CAR below the total SREP capital requirement (TSCR - failing or
+ *       likely to fail, BRRD Art. 32) for {@value #TERMINAL_THRESHOLD_DAYS}
+ *       consecutive days -> {@code GAME_OVER}.</li>
+ *   <li>Uncovered liquidity (HQLA/reserves short and the central bank
+ *       facility either switched off or out of eligible collateral) for
+ *       {@value #TERMINAL_THRESHOLD_DAYS} consecutive days -> {@code BANK_RUN}.</li>
+ *   <li>NSFR is a structural funding ratio, not a resolution trigger - it
+ *       warns but never ends the game on its own.</li>
+ *   <li>{@value #WIN_SURVIVAL_YEARS} simulated years survived with every
+ *       streak at zero <em>and</em> an average annual return on equity of at
+ *       least {@link #WIN_MINIMUM_RETURN_ON_EQUITY} -> {@code WON}. A bank
+ *       that survives by never lending doesn't earn its cost of capital, so
+ *       it doesn't win.</li>
  * </ul>
  */
 @Service
@@ -39,6 +44,8 @@ public class BankHealthService {
     static final int WARNING_THRESHOLD_DAYS = 5;
     static final int TERMINAL_THRESHOLD_DAYS = 10;
     static final int WIN_SURVIVAL_YEARS = 5;
+    /** Roughly the floor of what investors expect from an EU bank - below it, the bank isn't earning its cost of equity. */
+    static final BigDecimal WIN_MINIMUM_RETURN_ON_EQUITY = new BigDecimal("0.05");
 
     private final BankHealthRepository repository;
     private final DomainEventPublisher events;
@@ -61,15 +68,21 @@ public class BankHealthService {
             return previous;
         }
 
-        int previousCapitalStreak = previous == null ? 0 : previous.capitalBreachStreak();
-        int previousLiquidityStreak = previous == null ? 0 : previous.liquidityBreachStreak();
-        int capitalStreak = event.loanOriginationThrottled() ? previousCapitalStreak + 1 : 0;
-        int liquidityStreak = event.liquidityBreach() ? previousLiquidityStreak + 1 : 0;
+        BreachStreaks before = previous == null
+                ? BreachStreaks.NONE
+                : new BreachStreaks(previous.capitalBreachStreak(), previous.capitalShortfallStreak(),
+                        previous.fundingBreachStreak(), previous.liquidityBreachStreak());
+        BreachStreaks streaks = new BreachStreaks(
+                event.capitalBelowOverallRequirement() ? before.capital() + 1 : 0,
+                event.capitalBelowTotalSrepRequirement() ? before.capitalShortfall() + 1 : 0,
+                event.fundingBreach() ? before.funding() + 1 : 0,
+                event.liquidityBreach() ? before.liquidity() + 1 : 0);
 
-        BankHealthStatus status = deriveStatus(capitalStreak, liquidityStreak, event.date());
+        BankHealthStatus status = deriveStatus(streaks, event.returnOnEquity(), event.date());
 
-        BankHealthSnapshot snapshot = repository.insert(event.date(), status, capitalStreak, liquidityStreak);
-        events.publish(new BankHealthUpdatedEvent(event.date(), status, capitalStreak, liquidityStreak));
+        BankHealthSnapshot snapshot = repository.insert(event.date(), status, streaks);
+        events.publish(new BankHealthUpdatedEvent(
+                event.date(), status, streaks.capital(), streaks.capitalShortfall(), streaks.funding(), streaks.liquidity()));
         return snapshot;
     }
 
@@ -80,17 +93,20 @@ public class BankHealthService {
     }
 
     /** Package-visible for direct unit testing of the pure state-machine logic - see BankHealthStatusTest. */
-    static BankHealthStatus deriveStatus(int capitalStreak, int liquidityStreak, LocalDate date) {
-        if (capitalStreak >= TERMINAL_THRESHOLD_DAYS) {
+    static BankHealthStatus deriveStatus(BreachStreaks streaks, BigDecimal returnOnEquity, LocalDate date) {
+        if (streaks.capitalShortfall() >= TERMINAL_THRESHOLD_DAYS) {
             return BankHealthStatus.GAME_OVER;
         }
-        if (liquidityStreak >= TERMINAL_THRESHOLD_DAYS) {
+        if (streaks.liquidity() >= TERMINAL_THRESHOLD_DAYS) {
             return BankHealthStatus.BANK_RUN;
         }
-        if (capitalStreak >= WARNING_THRESHOLD_DAYS || liquidityStreak >= WARNING_THRESHOLD_DAYS) {
+        if (streaks.capital() >= WARNING_THRESHOLD_DAYS
+                || streaks.funding() >= WARNING_THRESHOLD_DAYS
+                || streaks.liquidity() >= WARNING_THRESHOLD_DAYS) {
             return BankHealthStatus.WARNING;
         }
-        if (capitalStreak == 0 && liquidityStreak == 0
+        if (streaks.allClear()
+                && returnOnEquity != null && returnOnEquity.compareTo(WIN_MINIMUM_RETURN_ON_EQUITY) >= 0
                 && ChronoUnit.YEARS.between(SimulationClock.epoch(), date) >= WIN_SURVIVAL_YEARS) {
             return BankHealthStatus.WON;
         }

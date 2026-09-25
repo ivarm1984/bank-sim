@@ -1,0 +1,18 @@
+databaseChangeLog:
+  - changeSet:
+      id: loan-0008-add-default-probation-start
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: loan
+            tableName: loans
+            columns:
+              - column:
+                  # Set while a NON_PERFORMING (defaulted) loan is fully current
+                  # again: the date its 3-month probation started (EBA/GL/2016/07).
+                  # Null otherwise - see CreditRisk.nextStaging. phase now
+                  # applies to every loan type as its IFRS 9 stage
+                  # (PERFORMING = 1, UNDERPERFORMING = 2, NON_PERFORMING = 3),
+                  # driven by days past due rather than a random roll.
+                  name: probation_start_date
+                  type: date

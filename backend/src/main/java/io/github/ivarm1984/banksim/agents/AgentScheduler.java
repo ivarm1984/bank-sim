@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import io.github.ivarm1984.banksim.account.AccountService;
 import io.github.ivarm1984.banksim.clock.ClockTickedEvent;
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
+import io.github.ivarm1984.banksim.eventinjector.RecessionShockService;
 import io.github.ivarm1984.banksim.loan.LoanService;
 import io.github.ivarm1984.banksim.transaction.TransactionService;
 
@@ -29,8 +30,8 @@ public class AgentScheduler {
 
     public AgentScheduler(
             TransactionService transactionService, AccountService accountService, DomainEventPublisher events,
-            LoanService loanService) {
-        this.context = new AgentContext(transactionService, accountService, events, loanService);
+            LoanService loanService, RecessionShockService recessionShockService) {
+        this.context = new AgentContext(transactionService, accountService, events, loanService, recessionShockService);
     }
 
     public void register(Agent agent) {

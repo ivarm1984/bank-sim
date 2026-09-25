@@ -1,0 +1,26 @@
+databaseChangeLog:
+  - changeSet:
+      id: treasury-0004-add-rwa-and-return-on-equity
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: treasury
+            tableName: ratio_snapshots
+            columns:
+              - column:
+                  # Credit-risk RWA - each exposure class's net exposure times
+                  # its standardised risk weight (mortgage 35%, retail 75%,
+                  # corporate 100%, defaulted 100%/150% - see TreasuryService).
+                  # CAR's denominator. Existing rows default to 0 since this
+                  # codebase has no production data to preserve.
+                  name: risk_weighted_assets
+                  type: numeric(19,4)
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  # Average annual return on equity since the simulation epoch:
+                  # net income to date / paid-in capital / years elapsed. Null
+                  # on the epoch day itself (no time elapsed yet).
+                  name: return_on_equity
+                  type: numeric(12,6)

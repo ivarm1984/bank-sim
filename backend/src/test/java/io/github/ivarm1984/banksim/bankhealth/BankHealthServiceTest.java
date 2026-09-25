@@ -32,19 +32,28 @@ class BankHealthServiceTest extends PostgresIntegrationTest {
     @Autowired
     private BankHealthRepository bankHealthRepository;
 
+    /** Below OCR only (into the buffer, above TSCR), no other breach. */
+    private static TreasuryRatiosUpdatedEvent belowOcr(LocalDate date) {
+        return new TreasuryRatiosUpdatedEvent(date, true, true, false, false, false, BigDecimal.ZERO, BigDecimal.ZERO, GOOD_ROE);
+    }
+
+    private static TreasuryRatiosUpdatedEvent healthy(LocalDate date) {
+        return new TreasuryRatiosUpdatedEvent(date, false, false, false, false, false, BigDecimal.ZERO, BigDecimal.ZERO, GOOD_ROE);
+    }
+
+    private static final BigDecimal GOOD_ROE = new BigDecimal("0.08");
+
     @Test
     void consecutiveBreachDaysAccumulateAStreakAndAHealthyDayResetsIt() {
         LocalDate base = LocalDate.of(9100, 1, 1);
-        bankHealthRepository.insert(base.minusDays(1), BankHealthStatus.PLAYING, 0, 0);
+        bankHealthRepository.insert(base.minusDays(1), BankHealthStatus.PLAYING, BreachStreaks.NONE);
 
-        BankHealthSnapshot day1 = bankHealthService.computeAndPersist(
-                new TreasuryRatiosUpdatedEvent(base, true, false, BigDecimal.ZERO, BigDecimal.ZERO));
-        BankHealthSnapshot day2 = bankHealthService.computeAndPersist(
-                new TreasuryRatiosUpdatedEvent(base.plusDays(1), true, false, BigDecimal.ZERO, BigDecimal.ZERO));
-        BankHealthSnapshot day3 = bankHealthService.computeAndPersist(
-                new TreasuryRatiosUpdatedEvent(base.plusDays(2), false, false, BigDecimal.ZERO, BigDecimal.ZERO));
+        BankHealthSnapshot day1 = bankHealthService.computeAndPersist(belowOcr(base));
+        BankHealthSnapshot day2 = bankHealthService.computeAndPersist(belowOcr(base.plusDays(1)));
+        BankHealthSnapshot day3 = bankHealthService.computeAndPersist(healthy(base.plusDays(2)));
 
         assertThat(day1.capitalBreachStreak()).isEqualTo(1);
+        assertThat(day1.capitalShortfallStreak()).isEqualTo(0);
         assertThat(day1.status()).isEqualTo(BankHealthStatus.PLAYING);
         assertThat(day2.capitalBreachStreak()).isEqualTo(2);
         assertThat(day3.capitalBreachStreak()).isEqualTo(0);
@@ -59,10 +68,11 @@ class BankHealthServiceTest extends PostgresIntegrationTest {
     @Test
     void aTerminalStatusFreezesFurtherEvaluationInsteadOfPersistingNewRows() {
         LocalDate terminalDate = LocalDate.of(9200, 1, 1);
-        bankHealthRepository.insert(terminalDate, BankHealthStatus.GAME_OVER, BankHealthService.TERMINAL_THRESHOLD_DAYS, 0);
+        int terminal = BankHealthService.TERMINAL_THRESHOLD_DAYS;
+        bankHealthRepository.insert(terminalDate, BankHealthStatus.GAME_OVER, new BreachStreaks(terminal, terminal, 0, 0));
 
-        BankHealthSnapshot result = bankHealthService.computeAndPersist(
-                new TreasuryRatiosUpdatedEvent(terminalDate.plusDays(1), true, true, BigDecimal.ZERO, BigDecimal.ZERO));
+        BankHealthSnapshot result = bankHealthService.computeAndPersist(new TreasuryRatiosUpdatedEvent(
+                terminalDate.plusDays(1), true, true, true, true, true, BigDecimal.ZERO, BigDecimal.ZERO, null));
 
         assertThat(result.status()).isEqualTo(BankHealthStatus.GAME_OVER);
         assertThat(result.snapshotDate()).isEqualTo(terminalDate);

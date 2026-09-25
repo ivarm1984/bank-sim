@@ -18,12 +18,14 @@ public class BankHealthRepository {
     }
 
     public BankHealthSnapshot insert(
-            LocalDate snapshotDate, BankHealthStatus status, int capitalBreachStreak, int liquidityBreachStreak) {
+            LocalDate snapshotDate, BankHealthStatus status, BreachStreaks streaks) {
         var record = dsl.insertInto(HEALTH_SNAPSHOTS)
                 .set(HEALTH_SNAPSHOTS.SNAPSHOT_DATE, snapshotDate)
                 .set(HEALTH_SNAPSHOTS.STATUS, status.name())
-                .set(HEALTH_SNAPSHOTS.CAPITAL_BREACH_STREAK, capitalBreachStreak)
-                .set(HEALTH_SNAPSHOTS.LIQUIDITY_BREACH_STREAK, liquidityBreachStreak)
+                .set(HEALTH_SNAPSHOTS.CAPITAL_BREACH_STREAK, streaks.capital())
+                .set(HEALTH_SNAPSHOTS.CAPITAL_SHORTFALL_STREAK, streaks.capitalShortfall())
+                .set(HEALTH_SNAPSHOTS.FUNDING_BREACH_STREAK, streaks.funding())
+                .set(HEALTH_SNAPSHOTS.LIQUIDITY_BREACH_STREAK, streaks.liquidity())
                 .returning()
                 .fetchOne();
         return toSnapshot(record);
@@ -45,6 +47,8 @@ public class BankHealthRepository {
                 record.getSnapshotDate(),
                 BankHealthStatus.valueOf(record.getStatus()),
                 record.getCapitalBreachStreak(),
+                record.getCapitalShortfallStreak(),
+                record.getFundingBreachStreak(),
                 record.getLiquidityBreachStreak(),
                 record.getCreatedAt());
     }

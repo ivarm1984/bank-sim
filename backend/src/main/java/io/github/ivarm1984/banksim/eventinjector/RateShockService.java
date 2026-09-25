@@ -36,6 +36,14 @@ public class RateShockService {
     static final double DAILY_PROBABILITY = 0.003;
     /** 75bps - a "surprise" move, 3x the routine 25bps review step CentralBankRateSchedule uses. */
     static final BigDecimal SHOCK_MAGNITUDE = new BigDecimal("0.0075");
+    /**
+     * Direction bias: in the euro area recessions usually bring ECB cuts,
+     * while outside one the surprise moves lean towards hikes (inflation
+     * pressure in an expansion) - so margin compression tends to coincide
+     * with the credit losses a recession brings, as it does in reality.
+     */
+    static final double HIKE_PROBABILITY_IN_RECESSION = 0.2;
+    static final double HIKE_PROBABILITY_OUTSIDE_RECESSION = 0.6;
 
     private final RateShockRepository repository;
     private final CentralBankRateSchedule schedule;
@@ -56,11 +64,12 @@ public class RateShockService {
     }
 
     @Transactional
-    public void maybeTriggerShock(LocalDate date) {
+    public void maybeTriggerShock(LocalDate date, boolean recessionActive) {
         if (random.nextDouble() >= DAILY_PROBABILITY) {
             return;
         }
-        BigDecimal requested = random.nextBoolean() ? SHOCK_MAGNITUDE : SHOCK_MAGNITUDE.negate();
+        double hikeProbability = recessionActive ? HIKE_PROBABILITY_IN_RECESSION : HIKE_PROBABILITY_OUTSIDE_RECESSION;
+        BigDecimal requested = random.nextDouble() < hikeProbability ? SHOCK_MAGNITUDE : SHOCK_MAGNITUDE.negate();
         BigDecimal base = schedule.ratesOn(date).policyRate();
         BigDecimal offsetBefore = repository.sumDeltaOnOrBefore(date);
         BigDecimal effectiveBefore = CentralBankRateSchedule.clamp(base.add(offsetBefore));

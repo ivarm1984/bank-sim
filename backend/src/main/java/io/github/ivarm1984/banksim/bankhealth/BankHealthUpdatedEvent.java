@@ -8,5 +8,6 @@ import java.time.LocalDate;
  * {@link BankHealthService#computeAndPersist}.
  */
 public record BankHealthUpdatedEvent(
-        LocalDate date, BankHealthStatus status, int capitalBreachStreak, int liquidityBreachStreak) {
+        LocalDate date, BankHealthStatus status, int capitalBreachStreak, int capitalShortfallStreak,
+        int fundingBreachStreak, int liquidityBreachStreak) {
 }

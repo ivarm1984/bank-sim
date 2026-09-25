@@ -7,13 +7,15 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
 import io.github.ivarm1984.banksim.clock.DayRolledOverEvent;
-import io.github.ivarm1984.banksim.loan.LoanPhaseTransitionService;
+import io.github.ivarm1984.banksim.loan.LoanStagingService;
 
 /**
- * Drives EventInjector's daily dice rolls, in order: rate shock, then
- * recession tick, then the BUSINESS loan phase-transition roll (which needs
- * that day's fresh recession-active state). Each step is independently
- * try/caught so one failing roll never blocks the others.
+ * Drives EventInjector's daily steps, in order: recession tick first (its
+ * state biases the rate shock's direction and feeds the forward-looking
+ * PDs), then the rate shock roll, then - if the recession just started or
+ * ended - a book-wide ECL remeasurement under the new macro scenario, and
+ * finally the daily days-past-due staging pass. Each step is independently
+ * try/caught so one failing step never blocks the others.
  */
 @Service
 public class EventInjectorScheduler {
@@ -22,25 +24,20 @@ public class EventInjectorScheduler {
 
     private final RateShockService rateShockService;
     private final RecessionShockService recessionShockService;
-    private final LoanPhaseTransitionService loanPhaseTransitionService;
+    private final LoanStagingService loanStagingService;
 
     public EventInjectorScheduler(
             RateShockService rateShockService, RecessionShockService recessionShockService,
-            LoanPhaseTransitionService loanPhaseTransitionService) {
+            LoanStagingService loanStagingService) {
         this.rateShockService = rateShockService;
         this.recessionShockService = recessionShockService;
-        this.loanPhaseTransitionService = loanPhaseTransitionService;
+        this.loanStagingService = loanStagingService;
     }
 
     @EventListener
     @Order(DayRolledOverEvent.ORDER_EVENT_INJECTOR)
     public void onDayRolledOver(DayRolledOverEvent event) {
-        try {
-            rateShockService.maybeTriggerShock(event.newDate());
-        } catch (Exception e) {
-            log.warn("Rate shock roll failed for {}", event.newDate(), e);
-        }
-
+        boolean wasActive = recessionShockService.isActive(event.newDate().minusDays(1));
         boolean recessionActive = recessionShockService.isActive(event.newDate());
         try {
             recessionActive = recessionShockService.tick(event.newDate());
@@ -49,9 +46,23 @@ public class EventInjectorScheduler {
         }
 
         try {
-            loanPhaseTransitionService.rollDailyTransitions(event.newDate(), recessionActive);
+            rateShockService.maybeTriggerShock(event.newDate(), recessionActive);
         } catch (Exception e) {
-            log.warn("Loan phase transition roll failed for {}", event.newDate(), e);
+            log.warn("Rate shock roll failed for {}", event.newDate(), e);
+        }
+
+        if (recessionActive != wasActive) {
+            try {
+                loanStagingService.remeasureAll(event.newDate(), recessionActive);
+            } catch (Exception e) {
+                log.warn("Book-wide ECL remeasurement failed for {}", event.newDate(), e);
+            }
+        }
+
+        try {
+            loanStagingService.evaluateDaily(event.newDate(), recessionActive);
+        } catch (Exception e) {
+            log.warn("Loan staging pass failed for {}", event.newDate(), e);
         }
     }
 }

@@ -16,10 +16,10 @@ import io.github.ivarm1984.banksim.ledger.LedgerService;
  * Posts a change in one loan's loan-loss provision to the singleton
  * LOAN_LOSS_PROVISION / PROVISION_EXPENSE accounts - a positive delta is a
  * charge (Debit PROVISION_EXPENSE / Credit LOAN_LOSS_PROVISION), a negative
- * one a release back to profit (the reverse). Shared by the phase-transition
- * roll and by {@code LoanService.repay}, which remeasures the provision
- * against the shrinking outstanding principal and releases it in full on
- * payoff.
+ * one a release back to profit (the reverse). Shared by
+ * {@link LoanStagingService} (stage changes, macro remeasurement) and
+ * {@code LoanService} (day-one allowance at disbursement, remeasurement after
+ * each repayment, full release on payoff).
  */
 @Component
 class LoanProvisionPoster {

@@ -106,7 +106,7 @@ async function apply() {
         />
       </label>
       <label class="flex flex-col gap-1 text-sm text-ink-soft">
-        Target capital buffer (%)
+        Management buffer above 12.5% OCR (%)
         <input
           v-model.number="targetCapitalBufferPct"
           type="number"

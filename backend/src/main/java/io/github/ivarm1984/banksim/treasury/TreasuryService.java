@@ -3,6 +3,7 @@ package io.github.ivarm1984.banksim.treasury;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.NoSuchElementException;
 
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import io.github.ivarm1984.banksim.centralbank.CentralBankService;
+import io.github.ivarm1984.banksim.clock.SimulationClock;
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
 import io.github.ivarm1984.banksim.ledger.EntryType;
 import io.github.ivarm1984.banksim.ledger.JournalEntryRequest;
@@ -18,6 +20,8 @@ import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
 import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerService;
+import io.github.ivarm1984.banksim.loan.CreditExposure;
+import io.github.ivarm1984.banksim.loan.LoanExposureService;
 import io.github.ivarm1984.banksim.policy.PolicyLevers;
 
 /**
@@ -56,11 +60,58 @@ public class TreasuryService {
     /** ECB minimum reserve ratio, simplified to all customer deposits (real rule excludes liabilities with maturity over 2 years). */
     static final BigDecimal MIN_RESERVE_REQUIREMENT_RATE = new BigDecimal("0.01");
 
-    /** Risk weight applied to the loan book for the CAR denominator - central bank reserves/cash get 0% (sovereign exposure), loans a flat 100% (unrated standardized-approach exposure). */
-    static final BigDecimal LOAN_RISK_WEIGHT = BigDecimal.ONE;
+    /*
+     * Standardised-approach credit risk weights for the CAR denominator,
+     * applied to exposures net of their loss allowance (CRR Art. 111).
+     * Central bank reserves/cash get 0% (sovereign exposure) and aren't listed.
+     */
+    /** CRR Art. 125 - exposures fully secured by residential property. */
+    static final BigDecimal MORTGAGE_RISK_WEIGHT = new BigDecimal("0.35");
+    /** CRR Art. 123 - regulatory retail exposures. */
+    static final BigDecimal RETAIL_RISK_WEIGHT = new BigDecimal("0.75");
+    /** CRR Art. 122 - unrated corporate exposures. */
+    static final BigDecimal CORPORATE_RISK_WEIGHT = BigDecimal.ONE;
+    /** CRR Art. 127 - defaulted exposures whose specific credit risk adjustments are below 20% of the exposure... */
+    static final BigDecimal DEFAULTED_UNDER_PROVISIONED_RISK_WEIGHT = new BigDecimal("1.50");
+    /** ...and at or above 20%. */
+    static final BigDecimal DEFAULTED_PROVISIONED_RISK_WEIGHT = BigDecimal.ONE;
+    static final BigDecimal DEFAULTED_PROVISION_COVERAGE_THRESHOLD = new BigDecimal("0.20");
 
-    /** EU minimum total capital ratio (CRR), ignoring the combined buffers real CRR layers on top. */
-    static final BigDecimal CAR_MINIMUM = new BigDecimal("0.08");
+    /*
+     * The regulatory capital stack, as total capital / RWA. Illustrative
+     * figures - a real bank's P2R is set bank-by-bank in its SREP decision,
+     * and its combined buffer also includes countercyclical/systemic buffers,
+     * not modeled here.
+     */
+    /** Pillar 1 minimum total capital ratio - CRR Art. 92(1)(c). */
+    static final BigDecimal PILLAR_1_MINIMUM = new BigDecimal("0.08");
+    /** Pillar 2 requirement - CRD Art. 104(1)(a). */
+    static final BigDecimal PILLAR_2_REQUIREMENT = new BigDecimal("0.02");
+    /** Capital conservation buffer - CRD Art. 129. */
+    static final BigDecimal CAPITAL_CONSERVATION_BUFFER = new BigDecimal("0.025");
+    /**
+     * Total SREP capital requirement (P1 + P2R). Breaching it means the bank
+     * is failing or likely to fail (BRRD Art. 32(4)(a)) - CEO-mode game over.
+     */
+    public static final BigDecimal TOTAL_SREP_CAPITAL_REQUIREMENT = PILLAR_1_MINIMUM.add(PILLAR_2_REQUIREMENT);
+    /**
+     * Overall capital requirement (TSCR + combined buffer). Dipping into the
+     * buffer isn't a breach of minimum requirements, but triggers maximum
+     * distributable amount restrictions (CRD Art. 141) - a regulator warning.
+     */
+    public static final BigDecimal OVERALL_CAPITAL_REQUIREMENT = TOTAL_SREP_CAPITAL_REQUIREMENT.add(CAPITAL_CONSERVATION_BUFFER);
+
+    /** CRR2 Art. 428b - NSFR must stay at or above 100%. */
+    static final BigDecimal NSFR_MINIMUM = BigDecimal.ONE;
+
+    /**
+     * Haircut on credit claims (loans) pledged as collateral for the central
+     * bank's marginal lending facility. The Eurosystem only lends against
+     * eligible collateral valued after haircuts, and never accepts defaulted
+     * claims - so the facility is capped, not unlimited. Illustrative figure;
+     * real credit-claim haircuts vary by maturity/rating.
+     */
+    static final BigDecimal CREDIT_CLAIM_HAIRCUT = new BigDecimal("0.30");
 
     private static final BigDecimal DAYS_PER_YEAR = new BigDecimal("365");
 
@@ -70,16 +121,19 @@ public class TreasuryService {
     private final CentralBankService centralBankService;
     private final DomainEventPublisher events;
     private final PolicyLevers policyLevers;
+    private final LoanExposureService loanExposureService;
 
     public TreasuryService(
             LedgerAccountService ledgerAccountService, TreasuryRatioRepository repository, LedgerService ledgerService,
-            CentralBankService centralBankService, DomainEventPublisher events, PolicyLevers policyLevers) {
+            CentralBankService centralBankService, DomainEventPublisher events, PolicyLevers policyLevers,
+            LoanExposureService loanExposureService) {
         this.ledgerAccountService = ledgerAccountService;
         this.repository = repository;
         this.ledgerService = ledgerService;
         this.centralBankService = centralBankService;
         this.events = events;
         this.policyLevers = policyLevers;
+        this.loanExposureService = loanExposureService;
     }
 
     /** Recomputes every ratio from the current ledger totals and persists one snapshot row for {@code date}. */
@@ -92,12 +146,12 @@ public class TreasuryService {
         BigDecimal hqla = b.bankCash().add(b.centralBankReserves());
         BigDecimal availableStableFunding = b.capitalBase().add(b.customerDeposits().multiply(NSFR_DEPOSIT_ASF_FACTOR));
         BigDecimal requiredStableFunding = b.netLoans().multiply(NSFR_LOAN_RSF_FACTOR);
-        BigDecimal riskWeightedAssets = b.netLoans().multiply(LOAN_RISK_WEIGHT);
+        BigDecimal riskWeightedAssets = riskWeightedAssets(loanExposureService.activeExposures());
 
         return repository.insert(
                 date,
                 b.bankCash(), b.centralBankReserves(), b.loansReceivable(), b.loanLossProvision(), b.customerDeposits(),
-                b.capitalBase(),
+                b.capitalBase(), riskWeightedAssets, returnOnEquity(b, date),
                 ratio(b.loansReceivable(), b.customerDeposits()),
                 ratio(hqla, estimatedThirtyDayOutflow),
                 ratio(availableStableFunding, requiredStableFunding),
@@ -113,8 +167,9 @@ public class TreasuryService {
     }
 
     /**
-     * True while the latest snapshot shows a capital/funding-structure
-     * breach (NSFR or CAR below its EU minimum) - {@code LoanService}
+     * True while the latest snapshot shows CAR below the CEO's management
+     * target (OCR + the {@code targetCapitalBuffer} lever) or NSFR below 100%
+     * (no stable funding for more long-term lending) - {@code LoanService}
      * consults this before originating a new loan. A liquidity breach
      * (LCR/reserve-coverage) does *not* throttle lending - that's handled by
      * {@link #applyFeedback} auto-borrowing reserves instead, since it's a
@@ -122,14 +177,17 @@ public class TreasuryService {
      * any snapshot has ever been computed.
      */
     public boolean isLoanOriginationThrottled() {
-        return repository.findMostRecent().map(this::isCapitalBreach).orElse(false);
+        return repository.findMostRecent().map(this::isLoanOriginationThrottled).orElse(false);
     }
 
     /**
      * Reacts to one day's snapshot: a liquidity breach (LCR or reserve
-     * coverage below 100%) draws exactly enough from the central bank's
-     * marginal lending facility to cover the worse of the two shortfalls
-     * (Debit CENTRAL_BANK_RESERVES, Credit CENTRAL_BANK_BORROWINGS); absent a
+     * coverage below 100%) draws from the central bank's marginal lending
+     * facility enough to cover the worse of the two shortfalls - but never
+     * more than the unused eligible collateral allows (see
+     * {@link #CREDIT_CLAIM_HAIRCUT}), so a big enough outflow can outrun the
+     * safety net (Debit CENTRAL_BANK_RESERVES, Credit
+     * CENTRAL_BANK_BORROWINGS); absent a
      * breach, any outstanding facility balance is repaid using only the
      * headroom that keeps both ratios at or above 100% afterward (Debit
      * CENTRAL_BANK_BORROWINGS, Credit CENTRAL_BANK_RESERVES). Always
@@ -150,8 +208,8 @@ public class TreasuryService {
         BigDecimal amountRepaid = BigDecimal.ZERO;
         if (liquidityBreach) {
             if (policyLevers.state().autoTapBorrowingFacility()) {
-                amountBorrowed = hqlaHeadroom.negate().max(reserveHeadroom.negate()).max(BigDecimal.ZERO)
-                        .setScale(2, RoundingMode.HALF_UP);
+                BigDecimal shortfall = hqlaHeadroom.negate().max(reserveHeadroom.negate()).max(BigDecimal.ZERO);
+                amountBorrowed = shortfall.min(unusedCollateralCapacity()).setScale(2, RoundingMode.HALF_UP);
                 if (amountBorrowed.signum() > 0) {
                     postCentralBankFacilityMovement("draw", amountBorrowed, EntryType.DEBIT, snapshot.snapshotDate());
                 }
@@ -166,7 +224,15 @@ public class TreasuryService {
         }
 
         events.publish(new TreasuryRatiosUpdatedEvent(
-                snapshot.snapshotDate(), isCapitalBreach(snapshot), liquidityBreach, amountBorrowed, amountRepaid));
+                snapshot.snapshotDate(),
+                isLoanOriginationThrottled(snapshot),
+                isBelow(snapshot.capitalAdequacyRatio(), OVERALL_CAPITAL_REQUIREMENT),
+                isBelow(snapshot.capitalAdequacyRatio(), TOTAL_SREP_CAPITAL_REQUIREMENT),
+                isBelow(snapshot.netStableFundingRatio(), NSFR_MINIMUM),
+                liquidityBreach,
+                amountBorrowed,
+                amountRepaid,
+                snapshot.returnOnEquity()));
     }
 
     /**
@@ -212,18 +278,71 @@ public class TreasuryService {
     }
 
     /**
-     * NSFR/CAR breach against their EU minimums, each shifted up by the CEO's
-     * {@code targetCapitalBuffer} lever - 0 (the default) reproduces the
-     * unshifted regulatory minimums; a positive buffer throttles earlier,
-     * i.e. more conservative lending.
+     * The management throttle: CAR below OCR plus the CEO's own
+     * {@code targetCapitalBuffer} (a management buffer on top of the
+     * regulatory stack - 0 means "lend right up to OCR"), or NSFR below its
+     * 100% minimum. The buffer shifts only the capital threshold - it's a
+     * capital concept, unrelated to NSFR's funding structure - and it only
+     * throttles lending: warnings/game over are judged against the
+     * regulatory thresholds alone, so a more prudent CEO is never punished.
      */
-    private boolean isCapitalBreach(TreasuryRatioSnapshot snapshot) {
-        BigDecimal buffer = policyLevers.state().targetCapitalBuffer();
-        BigDecimal nsfrThreshold = BigDecimal.ONE.add(buffer);
-        BigDecimal carThreshold = CAR_MINIMUM.add(buffer);
-        boolean nsfrBreach = snapshot.netStableFundingRatio() != null && snapshot.netStableFundingRatio().compareTo(nsfrThreshold) < 0;
-        boolean carBreach = snapshot.capitalAdequacyRatio() != null && snapshot.capitalAdequacyRatio().compareTo(carThreshold) < 0;
-        return nsfrBreach || carBreach;
+    private boolean isLoanOriginationThrottled(TreasuryRatioSnapshot snapshot) {
+        BigDecimal carTarget = OVERALL_CAPITAL_REQUIREMENT.add(policyLevers.state().targetCapitalBuffer());
+        return isBelow(snapshot.capitalAdequacyRatio(), carTarget) || isBelow(snapshot.netStableFundingRatio(), NSFR_MINIMUM);
+    }
+
+    /** A null ratio (zero denominator - e.g. no loans yet) is never a breach. */
+    private static boolean isBelow(BigDecimal ratio, BigDecimal threshold) {
+        return ratio != null && ratio.compareTo(threshold) < 0;
+    }
+
+    /** Package-visible for direct unit testing - see the risk-weight constants above. */
+    static BigDecimal riskWeightedAssets(List<CreditExposure> exposures) {
+        return exposures.stream()
+                .map(e -> e.netExposure().multiply(riskWeight(e)))
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(4, RoundingMode.HALF_UP);
+    }
+
+    static BigDecimal riskWeight(CreditExposure exposure) {
+        if (exposure.defaulted()) {
+            BigDecimal coverageThreshold = exposure.outstandingPrincipal().multiply(DEFAULTED_PROVISION_COVERAGE_THRESHOLD);
+            return exposure.provision().compareTo(coverageThreshold) < 0
+                    ? DEFAULTED_UNDER_PROVISIONED_RISK_WEIGHT
+                    : DEFAULTED_PROVISIONED_RISK_WEIGHT;
+        }
+        return switch (exposure.loanType()) {
+            case MORTGAGE -> MORTGAGE_RISK_WEIGHT;
+            case CONSUMER -> RETAIL_RISK_WEIGHT;
+            case BUSINESS -> CORPORATE_RISK_WEIGHT;
+        };
+    }
+
+    /** Eligible (non-defaulted) credit claims after haircut, less what's already drawn against them. */
+    private BigDecimal unusedCollateralCapacity() {
+        BigDecimal collateralValue = loanExposureService.activeExposures().stream()
+                .filter(e -> !e.defaulted())
+                .map(CreditExposure::outstandingPrincipal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .multiply(BigDecimal.ONE.subtract(CREDIT_CLAIM_HAIRCUT));
+        BigDecimal outstanding = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
+        return collateralValue.subtract(outstanding).max(BigDecimal.ZERO);
+    }
+
+    /**
+     * Average annual return on equity since the epoch: net income to date
+     * (capital base above paid-in capital) / paid-in capital / years elapsed.
+     * Null on the epoch day itself.
+     */
+    private static BigDecimal returnOnEquity(Balances b, LocalDate date) {
+        long days = ChronoUnit.DAYS.between(SimulationClock.epoch(), date);
+        if (days <= 0 || b.bankCapital().signum() <= 0) {
+            return null;
+        }
+        BigDecimal years = BigDecimal.valueOf(days).divide(DAYS_PER_YEAR, 10, RoundingMode.HALF_UP);
+        return b.capitalBase().subtract(b.bankCapital())
+                .divide(b.bankCapital(), 10, RoundingMode.HALF_UP)
+                .divide(years, RATIO_SCALE, RoundingMode.HALF_UP);
     }
 
     private Balances currentBalances() {
@@ -247,7 +366,7 @@ public class TreasuryService {
         BigDecimal capitalBase = bankCapital.add(interestIncome).add(feeIncome)
                 .subtract(interestExpense).subtract(provisionExpense);
 
-        return new Balances(bankCash, centralBankReserves, loansReceivable, loanLossProvision, customerDeposits, capitalBase);
+        return new Balances(bankCash, centralBankReserves, loansReceivable, loanLossProvision, customerDeposits, bankCapital, capitalBase);
     }
 
     private static BigDecimal debitTotal(List<LedgerAccountBalance> balances, LedgerAccountType type) {
@@ -274,7 +393,7 @@ public class TreasuryService {
 
     private record Balances(
             BigDecimal bankCash, BigDecimal centralBankReserves, BigDecimal loansReceivable, BigDecimal loanLossProvision,
-            BigDecimal customerDeposits, BigDecimal capitalBase) {
+            BigDecimal customerDeposits, BigDecimal bankCapital, BigDecimal capitalBase) {
 
         /** Loan book at its net carrying amount - gross receivables less the loan-loss provision contra-asset. */
         BigDecimal netLoans() {

@@ -1,0 +1,28 @@
+databaseChangeLog:
+  - changeSet:
+      id: bankhealth-0003-add-shortfall-and-funding-streaks
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: bankhealth
+            tableName: health_snapshots
+            columns:
+              - column:
+                  # Consecutive days CAR has been below the total SREP capital
+                  # requirement (TSCR, P1 + P2R) - failing or likely to fail.
+                  # capital_breach_streak now counts days below the overall
+                  # capital requirement (OCR, TSCR + combined buffer). Existing
+                  # rows default to 0 since this codebase has no production
+                  # data to preserve.
+                  name: capital_shortfall_streak
+                  type: int
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  # Consecutive days NSFR has been below 100%.
+                  name: funding_breach_streak
+                  type: int
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false

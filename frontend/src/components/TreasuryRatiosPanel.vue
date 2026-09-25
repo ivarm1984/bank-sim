@@ -27,7 +27,9 @@ const rows = [
   { label: 'Liquidity coverage ratio', key: 'liquidityCoverageRatio' as const, minimum: '100%' },
   { label: 'Net stable funding ratio', key: 'netStableFundingRatio' as const, minimum: '100%' },
   { label: 'Reserve coverage ratio', key: 'reserveCoverageRatio' as const, minimum: '100%' },
-  { label: 'Capital adequacy ratio', key: 'capitalAdequacyRatio' as const, minimum: '8%' },
+  // TSCR (P1 8% + P2R 2%) is the failing-or-likely-to-fail line; OCR adds the 2.5% conservation buffer.
+  { label: 'Capital adequacy ratio', key: 'capitalAdequacyRatio' as const, minimum: '10% TSCR · 12.5% OCR' },
+  { label: 'Return on equity (avg. annual)', key: 'returnOnEquity' as const, minimum: '5% to win' },
 ]
 </script>
 
@@ -40,7 +42,7 @@ const rows = [
         <tr class="border-b border-rule text-left text-ink-soft">
           <th class="py-2 font-normal">Ratio</th>
           <th class="py-2 text-right font-normal">Value</th>
-          <th class="py-2 text-right font-normal">EU minimum</th>
+          <th class="py-2 text-right font-normal">Threshold</th>
         </tr>
       </thead>
       <tbody>
