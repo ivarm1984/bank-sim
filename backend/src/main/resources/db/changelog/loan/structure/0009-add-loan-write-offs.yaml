@@ -1,0 +1,88 @@
+databaseChangeLog:
+  - changeSet:
+      id: loan-0009-add-loan-write-offs
+      author: ivarm1984
+      changes:
+        # A defaulted loan that never cures is eventually written off: it
+        # leaves the active book for good (WRITTEN_OFF), so it's no longer a
+        # non-performing exposure - see LoanWriteOffService.
+        - sql:
+            sql: >-
+              ALTER TABLE loan.loans
+              DROP CONSTRAINT chk_loans_status;
+        - sql:
+            sql: >-
+              ALTER TABLE loan.loans
+              ADD CONSTRAINT chk_loans_status
+              CHECK (status IN ('ACTIVE', 'PAID_OFF', 'WRITTEN_OFF'));
+        - createTable:
+            schemaName: loan
+            tableName: loan_write_offs
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: loan_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uq_loan_write_offs_loan_id
+                    references: loan.loans(id)
+                    foreignKeyName: fk_loan_write_offs_loan
+              - column:
+                  name: write_off_date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  # The date the loan last entered Stage 3 - write-off comes
+                  # after a fixed time continuously in default.
+                  name: defaulted_since
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  # Gross carrying amount derecognised.
+                  name: outstanding_principal
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Cash received from the collateral/debt sale: (1 - LGD) x
+                  # outstanding principal.
+                  name: recovery_amount
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Outstanding principal less the recovery, charged against
+                  # the loss allowance.
+                  name: written_off_amount
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # The loan's loss allowance at write-off, released in full.
+                  name: allowance_used
+                  type: numeric(19,4)
+                  constraints:
+                    nullable: false
+              - column:
+                  # Soft reference to ledger.journal_entries(id) - no
+                  # cross-schema FK, see AGENTS.md.
+                  name: journal_entry_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false

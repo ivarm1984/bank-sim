@@ -21,7 +21,7 @@ public class TreasuryRatioRepository {
     public TreasuryRatioSnapshot insert(
             LocalDate snapshotDate, BigDecimal bankCash, BigDecimal centralBankReserves, BigDecimal loansReceivable,
             BigDecimal loanLossProvision, BigDecimal customerDeposits, BigDecimal capitalBase, BigDecimal riskWeightedAssets,
-            BigDecimal returnOnEquity, BigDecimal loanToDepositRatio,
+            BigDecimal returnOnEquity, BigDecimal nonPerformingLoanRatio, BigDecimal loanToDepositRatio,
             BigDecimal liquidityCoverageRatio, BigDecimal netStableFundingRatio, BigDecimal requiredReserves,
             BigDecimal reserveCoverageRatio, BigDecimal capitalAdequacyRatio) {
         var record = dsl.insertInto(RATIO_SNAPSHOTS)
@@ -34,6 +34,7 @@ public class TreasuryRatioRepository {
                 .set(RATIO_SNAPSHOTS.CAPITAL_BASE, capitalBase)
                 .set(RATIO_SNAPSHOTS.RISK_WEIGHTED_ASSETS, riskWeightedAssets)
                 .set(RATIO_SNAPSHOTS.RETURN_ON_EQUITY, returnOnEquity)
+                .set(RATIO_SNAPSHOTS.NON_PERFORMING_LOAN_RATIO, nonPerformingLoanRatio)
                 .set(RATIO_SNAPSHOTS.LOAN_TO_DEPOSIT_RATIO, loanToDepositRatio)
                 .set(RATIO_SNAPSHOTS.LIQUIDITY_COVERAGE_RATIO, liquidityCoverageRatio)
                 .set(RATIO_SNAPSHOTS.NET_STABLE_FUNDING_RATIO, netStableFundingRatio)
@@ -73,6 +74,7 @@ public class TreasuryRatioRepository {
                 record.getCapitalAdequacyRatio(),
                 record.getRiskWeightedAssets(),
                 record.getReturnOnEquity(),
+                record.getNonPerformingLoanRatio(),
                 record.getCreatedAt());
     }
 }

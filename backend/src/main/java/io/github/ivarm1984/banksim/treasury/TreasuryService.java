@@ -146,12 +146,13 @@ public class TreasuryService {
         BigDecimal hqla = b.bankCash().add(b.centralBankReserves());
         BigDecimal availableStableFunding = b.capitalBase().add(b.customerDeposits().multiply(NSFR_DEPOSIT_ASF_FACTOR));
         BigDecimal requiredStableFunding = b.netLoans().multiply(NSFR_LOAN_RSF_FACTOR);
-        BigDecimal riskWeightedAssets = riskWeightedAssets(loanExposureService.activeExposures());
+        List<CreditExposure> exposures = loanExposureService.activeExposures();
+        BigDecimal riskWeightedAssets = riskWeightedAssets(exposures);
 
         return repository.insert(
                 date,
                 b.bankCash(), b.centralBankReserves(), b.loansReceivable(), b.loanLossProvision(), b.customerDeposits(),
-                b.capitalBase(), riskWeightedAssets, returnOnEquity(b, date),
+                b.capitalBase(), riskWeightedAssets, returnOnEquity(b, date), nonPerformingLoanRatio(exposures),
                 ratio(b.loansReceivable(), b.customerDeposits()),
                 ratio(hqla, estimatedThirtyDayOutflow),
                 ratio(availableStableFunding, requiredStableFunding),
@@ -316,6 +317,23 @@ public class TreasuryService {
             case CONSUMER -> RETAIL_RISK_WEIGHT;
             case BUSINESS -> CORPORATE_RISK_WEIGHT;
         };
+    }
+
+    /**
+     * Gross defaulted (Stage 3) loans / gross loans - the EBA's NPL ratio
+     * (risk indicator AQT_3.2), gross of allowances. Written-off loans have
+     * left the book, so write-offs bring it down. Null while there are no
+     * loans. Package-visible for direct unit testing.
+     */
+    static BigDecimal nonPerformingLoanRatio(List<CreditExposure> exposures) {
+        BigDecimal gross = exposures.stream()
+                .map(CreditExposure::outstandingPrincipal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal nonPerforming = exposures.stream()
+                .filter(CreditExposure::defaulted)
+                .map(CreditExposure::outstandingPrincipal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return ratio(nonPerforming, gross);
     }
 
     /** Eligible (non-defaulted) credit claims after haircut, less what's already drawn against them. */

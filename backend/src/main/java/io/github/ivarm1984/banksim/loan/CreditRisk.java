@@ -97,6 +97,38 @@ public final class CreditRisk {
         return Math.max(1, loan.termMonths() - (loan.nextInstallmentNumber() - 1));
     }
 
+    /**
+     * Months continuously in default after which a loan with no prospect of
+     * curing is written off (IFRS 9 5.4.4: no reasonable expectation of
+     * recovering the rest). Mortgages get longer - repossessing and selling
+     * the home takes time. Illustrative figures, well inside the ECB's NPL
+     * backstop horizons (Reg. 2019/630), which would outlast a CEO-mode game.
+     */
+    static final int UNSECURED_WRITE_OFF_MONTHS = 12;
+    static final int MORTGAGE_WRITE_OFF_MONTHS = 24;
+
+    /**
+     * Due for write-off: in default since at least the product's write-off
+     * horizon and not on cure probation - a loan that's fully current again
+     * still has a reasonable expectation of recovery.
+     */
+    static boolean dueForWriteOff(LoanType type, LocalDate defaultedSince, LocalDate probationStart, LocalDate today) {
+        if (defaultedSince == null || probationStart != null) {
+            return false;
+        }
+        int months = type == LoanType.MORTGAGE ? MORTGAGE_WRITE_OFF_MONTHS : UNSECURED_WRITE_OFF_MONTHS;
+        return !today.isBefore(defaultedSince.plusMonths(months));
+    }
+
+    /**
+     * What the bank recovers at write-off - the collateral sale (mortgage) or
+     * debt sale (unsecured): {@code (1 - LGD) x outstanding}, so the part
+     * written off equals the Stage 3 allowance already held against it.
+     */
+    static BigDecimal recoveryAmount(LoanType type, BigDecimal outstandingPrincipal) {
+        return outstandingPrincipal.multiply(BigDecimal.ONE.subtract(lossGivenDefault(type))).setScale(2, RoundingMode.HALF_UP);
+    }
+
     /** A loan's stage plus, while in default, the date its probation started (null if not on probation). */
     record Staging(LoanPhase phase, LocalDate probationStart) {
     }

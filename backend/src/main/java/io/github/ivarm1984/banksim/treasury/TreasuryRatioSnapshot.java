@@ -10,6 +10,7 @@ import java.time.OffsetDateTime;
  * net-stable-funding/capital-adequacy before any loan has been originated),
  * not zero or an error. {@code loansReceivable} is gross; NSFR/CAR are
  * computed on the net carrying amount, {@link #netLoans()}.
+ * {@code nonPerformingLoanRatio} is gross Stage 3 loans / gross loans.
  */
 public record TreasuryRatioSnapshot(
         Long id,
@@ -28,6 +29,7 @@ public record TreasuryRatioSnapshot(
         BigDecimal capitalAdequacyRatio,
         BigDecimal riskWeightedAssets,
         BigDecimal returnOnEquity,
+        BigDecimal nonPerformingLoanRatio,
         OffsetDateTime createdAt) {
 
     /** Gross loans receivable less the loan-loss provision contra-asset. */

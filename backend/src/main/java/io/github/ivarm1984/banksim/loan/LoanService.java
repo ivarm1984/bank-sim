@@ -300,7 +300,7 @@ public class LoanService {
         LoanAccount loan = loanRepository.findById(loanId);
         return new LoanDetail(
                 loan, loanRepository.findInstallmentsByLoanId(loanId), loanRepository.findPaymentsByLoanId(loanId),
-                loanRepository.findPhaseHistoryByLoanId(loanId));
+                loanRepository.findPhaseHistoryByLoanId(loanId), loanRepository.findWriteOffByLoanId(loanId).orElse(null));
     }
 
     public List<LoanAccount> findByAccountId(long accountId) {

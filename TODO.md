@@ -1035,13 +1035,40 @@ end-to-end.
 - [x] Loan default/delinquency simulation: `BorrowerAgent` that can miss
       payments (income shock, randomized), days-past-due tracking, non-performing
       loan (NPL) classification (done in CEO.5b)
-- [ ] NPL ratio (Stage 3 exposure / total loans) as a reported treasury figure
+- [x] NPL ratio (Stage 3 exposure / total loans) as a reported treasury figure
+  - `TreasuryService.nonPerformingLoanRatio`: gross Stage 3 / gross active
+    loans (EBA AQT_3.2, allowances ignored), null on an empty book. Persisted
+    as `ratio_snapshots.non_performing_loan_ratio` (`treasury-0005`) and shown
+    in `TreasuryRatiosPanel` against the EBA risk-dashboard buckets (<2% low,
+    >5% high). Reported only - it doesn't feed the throttle or bank health
 - [ ] Credit risk pricing: risk-based spread per borrower (simple credit score
       or income/debt ratio at origination) instead of a flat spread
 - [x] Loan-loss provisioning: provision expense posted against expected/actual
       defaults (IFRS 9-style expected credit loss, simplified; done in CEO.5b)
-- [ ] Write-offs: a defaulted loan that never cures stays on the book forever;
+- [x] Write-offs: a defaulted loan that never cures stays on the book forever;
       write it off against its allowance after some period in Stage 3
+  - Design calls (via `AskUserQuestion`): horizon by product - 12 months
+    continuously in Stage 3 for consumer/business, 24 for mortgages
+    (repossession takes longer); never while on cure probation. The bank
+    recovers (1 − LGD) × outstanding in cash (collateral/debt sale) and
+    writes the rest off against the allowance, which at Stage 3 is exactly
+    LGD × outstanding, so the write-off itself is P&L-neutral bar rounding
+  - New `LoanWriteOffService.writeOffDaily`, run by `EventInjectorScheduler`
+    after the staging pass (so before treasury's snapshot). One entry per
+    loan: Debit CENTRAL_BANK_RESERVES (recovery) + LOAN_LOSS_PROVISION
+    (allowance), Credit LOAN_RECEIVABLE (outstanding), any rounding gap to
+    PROVISION_EXPENSE. "Defaulted since" = the loan's latest transition into
+    NON_PERFORMING in `loan_phase_history`. `loan-0009` adds `WRITTEN_OFF`
+    to the status check and a `loan_write_offs` audit table (exposed as
+    `LoanDetail.writeOff`); `LoanWrittenOffEvent` → `LOAN_WRITTEN_OFF` on the
+    event feed. `BorrowerAgent` frees a slot whose loan was written off
+  - Verify: `./gradlew test` - 116 pass, incl. new `LoanWriteOffServiceTest`
+    (business write-off at exactly 12 months with 55% recovery / 45% against
+    allowance and receivable at zero, mortgage only at 24 months, probation
+    blocks it; trial balance balanced), `CreditRiskTest` write-off/recovery
+    cases and `TreasuryServiceTest.nplRatioIsGrossDefaultedLoansOverGrossLoans`.
+    `npm run build` clean. Not run live - a write-off needs ~17+ simulated
+    months (default + 12)
 - [ ] Full EU LCR breakdown: HQLA tiering (Level 1 / 2A / 2B, with haircuts) and
       CRR outflow/inflow categories instead of one aggregate liquidity number
 - [ ] Full NSFR breakdown: ASF (available stable funding) and RSF (required

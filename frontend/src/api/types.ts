@@ -101,6 +101,8 @@ export interface TreasuryRatioSnapshot {
   riskWeightedAssets: number
   /** Average annual return on equity since the epoch; null on day one. */
   returnOnEquity: number | null
+  /** Gross Stage 3 (defaulted) loans / gross loans; null while there are no loans. */
+  nonPerformingLoanRatio: number | null
   createdAt: string
 }
 

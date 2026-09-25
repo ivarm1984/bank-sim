@@ -73,4 +73,30 @@ class CreditRiskTest {
         assertThat(CreditRisk.expectedCreditLoss(LoanType.MORTGAGE, LoanPhase.NON_PERFORMING, EAD, 240, true))
                 .isEqualByComparingTo(CreditRisk.expectedCreditLoss(LoanType.MORTGAGE, LoanPhase.NON_PERFORMING, EAD, 240, false));
     }
+
+    @Test
+    void writeOffComesAfterTwelveMonthsInDefaultForUnsecuredLoansAndTwentyFourForMortgages() {
+        LocalDate defaulted = TODAY.minusMonths(12);
+        assertThat(CreditRisk.dueForWriteOff(LoanType.CONSUMER, defaulted.plusDays(1), null, TODAY)).isFalse();
+        assertThat(CreditRisk.dueForWriteOff(LoanType.CONSUMER, defaulted, null, TODAY)).isTrue();
+        assertThat(CreditRisk.dueForWriteOff(LoanType.BUSINESS, defaulted, null, TODAY)).isTrue();
+        assertThat(CreditRisk.dueForWriteOff(LoanType.MORTGAGE, defaulted, null, TODAY)).isFalse();
+        assertThat(CreditRisk.dueForWriteOff(LoanType.MORTGAGE, TODAY.minusMonths(24), null, TODAY)).isTrue();
+    }
+
+    @Test
+    void aLoanOnCureProbationOrNeverDefaultedIsNeverDueForWriteOff() {
+        assertThat(CreditRisk.dueForWriteOff(LoanType.CONSUMER, TODAY.minusYears(3), TODAY.minusDays(10), TODAY)).isFalse();
+        assertThat(CreditRisk.dueForWriteOff(LoanType.CONSUMER, null, null, TODAY)).isFalse();
+    }
+
+    @Test
+    void theRecoveryLeavesExactlyTheStage3AllowanceToWriteOff() {
+        for (LoanType type : LoanType.values()) {
+            BigDecimal recovery = CreditRisk.recoveryAmount(type, EAD);
+            BigDecimal stage3Ecl = CreditRisk.expectedCreditLoss(type, LoanPhase.NON_PERFORMING, EAD, 12, false);
+            assertThat(EAD.subtract(recovery)).isEqualByComparingTo(stage3Ecl);
+        }
+        assertThat(CreditRisk.recoveryAmount(LoanType.MORTGAGE, EAD)).isEqualByComparingTo("85000.00");
+    }
 }

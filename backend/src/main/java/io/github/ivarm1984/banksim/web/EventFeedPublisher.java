@@ -18,6 +18,7 @@ import io.github.ivarm1984.banksim.interest.InterestAccrualBatchCompletedEvent;
 import io.github.ivarm1984.banksim.loan.LoanOriginatedEvent;
 import io.github.ivarm1984.banksim.loan.LoanPhaseChangedEvent;
 import io.github.ivarm1984.banksim.loan.LoanRepaidEvent;
+import io.github.ivarm1984.banksim.loan.LoanWrittenOffEvent;
 import io.github.ivarm1984.banksim.transaction.TransactionCompletedEvent;
 import io.github.ivarm1984.banksim.treasury.TreasuryRatiosUpdatedEvent;
 
@@ -97,6 +98,12 @@ public class EventFeedPublisher {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onLoanPhaseChanged(LoanPhaseChangedEvent event) {
         send("LOAN_PHASE_CHANGED", event);
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onLoanWrittenOff(LoanWrittenOffEvent event) {
+        send("LOAN_WRITTEN_OFF", event);
     }
 
     /**

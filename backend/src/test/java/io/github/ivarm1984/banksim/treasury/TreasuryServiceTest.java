@@ -150,7 +150,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         // only 1,000 of cash/reserves are on hand - hqla headroom is -9,000.
         TreasuryRatioSnapshot breach = new TreasuryRatioSnapshot(
                 null, LocalDate.of(2091, 1, 1), BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO, BigDecimal.ZERO,
-                new BigDecimal("100000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("1000.00"), null, null, null, null, null);
+                new BigDecimal("100000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("1000.00"), null, null, null, null, null, null);
         treasuryService.applyFeedback(breach);
 
         BigDecimal outstandingAfterBorrow = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
@@ -166,7 +166,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         // an assumed-zero facility balance.
         TreasuryRatioSnapshot healthy = new TreasuryRatioSnapshot(
                 null, LocalDate.of(2091, 1, 2), BigDecimal.ZERO, new BigDecimal("10000000.00"), BigDecimal.ZERO, BigDecimal.ZERO,
-                new BigDecimal("1000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("100.00"), null, null, null, null, null);
+                new BigDecimal("1000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("100.00"), null, null, null, null, null, null);
         treasuryService.applyFeedback(healthy);
 
         BigDecimal borrowingsAfterRepay = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
@@ -189,7 +189,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         try {
             treasuryRatioRepository.insert(
                     LocalDate.of(2092, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                    BigDecimal.ZERO, null, null, null, new BigDecimal("0.500000"), BigDecimal.ZERO, null, new BigDecimal("0.010000"));
+                    BigDecimal.ZERO, null, null, null, null, new BigDecimal("0.500000"), BigDecimal.ZERO, null, new BigDecimal("0.010000"));
 
             assertThat(treasuryService.isLoanOriginationThrottled()).isTrue();
             Account account = openAccount();
@@ -198,7 +198,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         } finally {
             treasuryRatioRepository.insert(
                     LocalDate.of(2092, 1, 2), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                    BigDecimal.ZERO, null, null, null, new BigDecimal("10.000000"), BigDecimal.ZERO, null, new BigDecimal("1.000000"));
+                    BigDecimal.ZERO, null, null, null, null, new BigDecimal("10.000000"), BigDecimal.ZERO, null, new BigDecimal("1.000000"));
         }
         assertThat(treasuryService.isLoanOriginationThrottled()).isFalse();
     }
@@ -207,7 +207,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
     void borrowingInterestAccruesDailyAtTheMarginalLendingRate() {
         TreasuryRatioSnapshot breach = new TreasuryRatioSnapshot(
                 null, LocalDate.of(2093, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                new BigDecimal("500000.00"), BigDecimal.ZERO, null, null, null, BigDecimal.ZERO, null, null, null, null, null);
+                new BigDecimal("500000.00"), BigDecimal.ZERO, null, null, null, BigDecimal.ZERO, null, null, null, null, null, null);
         treasuryService.applyFeedback(breach);
         BigDecimal outstandingBefore = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
 
@@ -238,7 +238,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         try {
             treasuryRatioRepository.insert(
                     LocalDate.of(2094, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                    BigDecimal.ZERO, null, null, null, new BigDecimal("1.010000"), BigDecimal.ZERO, null, new BigDecimal("0.130000"));
+                    BigDecimal.ZERO, null, null, null, null, new BigDecimal("1.010000"), BigDecimal.ZERO, null, new BigDecimal("0.130000"));
             assertThat(treasuryService.isLoanOriginationThrottled()).isFalse();
 
             policyLevers.update(new PolicyLeversSnapshot(
@@ -251,7 +251,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
             policyLevers.update(original);
             treasuryRatioRepository.insert(
                     LocalDate.of(2094, 1, 2), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                    BigDecimal.ZERO, null, null, null, new BigDecimal("10.000000"), BigDecimal.ZERO, null, new BigDecimal("1.000000"));
+                    BigDecimal.ZERO, null, null, null, null, new BigDecimal("10.000000"), BigDecimal.ZERO, null, new BigDecimal("1.000000"));
         }
     }
 
@@ -269,7 +269,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
             // Same shortfall shape as liquidityBreachTriggersAnAutoBorrowAndRecoveryRepaysItBack.
             TreasuryRatioSnapshot breach = new TreasuryRatioSnapshot(
                     null, LocalDate.of(2095, 1, 2), BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO, BigDecimal.ZERO,
-                    new BigDecimal("100000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("1000.00"), null, null, null, null, null);
+                    new BigDecimal("100000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("1000.00"), null, null, null, null, null, null);
             treasuryService.applyFeedback(breach);
 
             BigDecimal outstandingAfter = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
@@ -332,6 +332,18 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         assertThat(rwa).isEqualByComparingTo(new BigDecimal("2065.00"));
     }
 
+    /** EBA AQT_3.2: gross Stage 3 loans over gross loans, allowances ignored; null for an empty book. */
+    @Test
+    void nplRatioIsGrossDefaultedLoansOverGrossLoans() {
+        BigDecimal npl = TreasuryService.nonPerformingLoanRatio(List.of(
+                new CreditExposure(LoanType.MORTGAGE, LoanPhase.PERFORMING, new BigDecimal("7000.00"), new BigDecimal("100.00")),
+                new CreditExposure(LoanType.CONSUMER, LoanPhase.UNDERPERFORMING, new BigDecimal("2000.00"), BigDecimal.ZERO),
+                new CreditExposure(LoanType.BUSINESS, LoanPhase.NON_PERFORMING, new BigDecimal("1000.00"), new BigDecimal("450.00"))));
+
+        assertThat(npl).isEqualByComparingTo(new BigDecimal("0.10"));
+        assertThat(TreasuryService.nonPerformingLoanRatio(List.of())).isNull();
+    }
+
     /** CRR Art. 127: a defaulted exposure is 150% while provisions cover under 20% of it, 100% once they cover 20%+. */
     @Test
     void defaultedExposuresAreWeightedByProvisionCoverage() {
@@ -362,7 +374,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         // Deposits of 10^12 need 10^11 of HQLA - far beyond any test loan book's collateral.
         TreasuryRatioSnapshot breach = new TreasuryRatioSnapshot(
                 null, LocalDate.of(2097, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                new BigDecimal("1000000000000.00"), BigDecimal.ZERO, null, null, null, BigDecimal.ZERO, null, null, null, null, null);
+                new BigDecimal("1000000000000.00"), BigDecimal.ZERO, null, null, null, BigDecimal.ZERO, null, null, null, null, null, null);
         treasuryService.applyFeedback(breach);
 
         BigDecimal outstandingAfter = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);

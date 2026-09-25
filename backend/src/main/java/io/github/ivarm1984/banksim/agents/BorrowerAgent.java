@@ -9,6 +9,7 @@ import java.util.Random;
 
 import io.github.ivarm1984.banksim.loan.CreditRisk;
 import io.github.ivarm1984.banksim.loan.LoanAccount;
+import io.github.ivarm1984.banksim.loan.LoanStatus;
 import io.github.ivarm1984.banksim.loan.LoanType;
 
 /**
@@ -26,7 +27,9 @@ import io.github.ivarm1984.banksim.loan.LoanType;
  * loan independently enters distress on a daily roll derived from its
  * product's 12-month PD (higher during a recession), stops paying while
  * distressed, and leaves distress on a daily recovery roll. A distress spell
- * outlasting ~90 days of arrears is a default; a shorter one cures.
+ * outlasting ~90 days of arrears is a default; a shorter one cures. A loan
+ * that stays in default long enough is written off by the bank, freeing the
+ * slot for a new loan of that type (a mortgage is still once ever).
  */
 public class BorrowerAgent implements Agent {
 
@@ -193,6 +196,10 @@ public class BorrowerAgent implements Agent {
                         loanId = null;
                     }
                 } catch (RuntimeException e) {
+                    // Written off while in arrears - the debt was sold, nothing left to pay.
+                    if (context.loanService().findById(loanId).status() == LoanStatus.WRITTEN_OFF) {
+                        loanId = null;
+                    }
                     return;
                 }
             }

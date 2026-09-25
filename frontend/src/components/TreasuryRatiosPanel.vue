@@ -29,6 +29,8 @@ const rows = [
   { label: 'Reserve coverage ratio', key: 'reserveCoverageRatio' as const, minimum: '100%' },
   // TSCR (P1 8% + P2R 2%) is the failing-or-likely-to-fail line; OCR adds the 2.5% conservation buffer.
   { label: 'Capital adequacy ratio', key: 'capitalAdequacyRatio' as const, minimum: '10% TSCR · 12.5% OCR' },
+  // Lower is better - EBA risk dashboard buckets (AQT_3.2); write-offs take defaulted loans off the book.
+  { label: 'Non-performing loan ratio', key: 'nonPerformingLoanRatio' as const, minimum: 'EBA: <2% low · >5% high' },
   { label: 'Return on equity (avg. annual)', key: 'returnOnEquity' as const, minimum: '5% to win' },
 ]
 </script>

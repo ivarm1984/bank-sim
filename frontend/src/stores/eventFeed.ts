@@ -27,6 +27,7 @@ function isSignificant(message: EventFeedMessage): boolean {
     case 'INTEREST_ACCRUAL_BATCH_COMPLETED':
     case 'BILL_PAYMENT_FAILED':
     case 'LOAN_ORIGINATED':
+    case 'LOAN_WRITTEN_OFF':
       return true
     case 'LOAN_REPAID':
       return Boolean((message.payload as AmountPayload).paidOff)

@@ -1,0 +1,15 @@
+databaseChangeLog:
+  - changeSet:
+      id: treasury-0005-add-npl-ratio
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: treasury
+            tableName: ratio_snapshots
+            columns:
+              - column:
+                  # Non-performing loan ratio: gross Stage 3 (defaulted) loans /
+                  # gross active loans (EBA risk indicator AQT_3.2). Null while
+                  # the loan book is empty.
+                  name: non_performing_loan_ratio
+                  type: numeric(12,6)

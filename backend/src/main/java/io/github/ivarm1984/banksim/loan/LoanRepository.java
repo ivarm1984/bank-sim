@@ -3,7 +3,11 @@ package io.github.ivarm1984.banksim.loan;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanInstallments.LOAN_INSTALLMENTS;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanPayments.LOAN_PAYMENTS;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanPhaseHistory.LOAN_PHASE_HISTORY;
+import static io.github.ivarm1984.banksim.jooq.loan.tables.LoanWriteOffs.LOAN_WRITE_OFFS;
 import static io.github.ivarm1984.banksim.jooq.loan.tables.Loans.LOANS;
+import static org.jooq.impl.DSL.field;
+import static org.jooq.impl.DSL.max;
+import static org.jooq.impl.DSL.select;
 import static org.jooq.impl.DSL.sum;
 
 import java.math.BigDecimal;
@@ -12,8 +16,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 
 import org.jooq.DSLContext;
+import org.jooq.Field;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -246,6 +252,80 @@ public class LoanRepository {
                 .map(LoanRepository::toLoanPhaseTransition);
     }
 
+    /** One defaulted loan's write-off inputs - see {@link #findDefaultedLoans}. */
+    public record DefaultedLoan(long loanId, LoanType loanType, LocalDate defaultedSince, LocalDate probationStartDate) {
+    }
+
+    /**
+     * Every active Stage 3 loan with the date it last entered default (its
+     * latest transition into NON_PERFORMING - a loan that cured and
+     * re-defaulted starts over). One query for the whole book; the daily
+     * write-off pass only locks the loans actually due.
+     */
+    public List<DefaultedLoan> findDefaultedLoans() {
+        Field<LocalDate> defaultedSince = defaultedSince();
+        return dsl.select(LOANS.ID, LOANS.LOAN_TYPE, LOANS.PROBATION_START_DATE, defaultedSince)
+                .from(LOANS)
+                .where(LOANS.STATUS.eq(LoanStatus.ACTIVE.name()))
+                .and(LOANS.PHASE.eq(LoanPhase.NON_PERFORMING.name()))
+                .orderBy(LOANS.ID)
+                .fetch(r -> new DefaultedLoan(
+                        r.get(LOANS.ID), LoanType.valueOf(r.get(LOANS.LOAN_TYPE)), r.get(defaultedSince),
+                        r.get(LOANS.PROBATION_START_DATE)));
+    }
+
+    /** Same definition as {@link #findDefaultedLoans}, for one loan; null if it has never defaulted. */
+    public LocalDate defaultedSince(long loanId) {
+        return dsl.select(max(LOAN_PHASE_HISTORY.TRANSITION_DATE))
+                .from(LOAN_PHASE_HISTORY)
+                .where(LOAN_PHASE_HISTORY.LOAN_ID.eq(loanId))
+                .and(LOAN_PHASE_HISTORY.TO_PHASE.eq(LoanPhase.NON_PERFORMING.name()))
+                .fetchOne(0, LocalDate.class);
+    }
+
+    private static Field<LocalDate> defaultedSince() {
+        return field(select(max(LOAN_PHASE_HISTORY.TRANSITION_DATE))
+                .from(LOAN_PHASE_HISTORY)
+                .where(LOAN_PHASE_HISTORY.LOAN_ID.eq(LOANS.ID))
+                .and(LOAN_PHASE_HISTORY.TO_PHASE.eq(LoanPhase.NON_PERFORMING.name())))
+                .as("defaulted_since");
+    }
+
+    /** Derecognises the loan: no receivable and no allowance left on the book. */
+    public void markWrittenOff(long loanId) {
+        dsl.update(LOANS)
+                .set(LOANS.STATUS, LoanStatus.WRITTEN_OFF.name())
+                .set(LOANS.OUTSTANDING_PRINCIPAL, BigDecimal.ZERO)
+                .set(LOANS.PROVISION_AMOUNT, BigDecimal.ZERO)
+                .set(LOANS.PROBATION_START_DATE, (LocalDate) null)
+                .where(LOANS.ID.eq(loanId))
+                .execute();
+    }
+
+    public LoanWriteOff insertWriteOff(
+            long loanId, LocalDate writeOffDate, LocalDate defaultedSince, BigDecimal outstandingPrincipal,
+            BigDecimal recoveryAmount, BigDecimal writtenOffAmount, BigDecimal allowanceUsed, long journalEntryId) {
+        var record = dsl.insertInto(LOAN_WRITE_OFFS)
+                .set(LOAN_WRITE_OFFS.LOAN_ID, loanId)
+                .set(LOAN_WRITE_OFFS.WRITE_OFF_DATE, writeOffDate)
+                .set(LOAN_WRITE_OFFS.DEFAULTED_SINCE, defaultedSince)
+                .set(LOAN_WRITE_OFFS.OUTSTANDING_PRINCIPAL, outstandingPrincipal)
+                .set(LOAN_WRITE_OFFS.RECOVERY_AMOUNT, recoveryAmount)
+                .set(LOAN_WRITE_OFFS.WRITTEN_OFF_AMOUNT, writtenOffAmount)
+                .set(LOAN_WRITE_OFFS.ALLOWANCE_USED, allowanceUsed)
+                .set(LOAN_WRITE_OFFS.JOURNAL_ENTRY_ID, journalEntryId)
+                .returning()
+                .fetchOne();
+        return toLoanWriteOff(record);
+    }
+
+    public Optional<LoanWriteOff> findWriteOffByLoanId(long loanId) {
+        return dsl.selectFrom(LOAN_WRITE_OFFS)
+                .where(LOAN_WRITE_OFFS.LOAN_ID.eq(loanId))
+                .fetchOptional()
+                .map(LoanRepository::toLoanWriteOff);
+    }
+
     public List<LoanInstallment> findInstallmentsByLoanId(long loanId) {
         return dsl.selectFrom(LOAN_INSTALLMENTS)
                 .where(LOAN_INSTALLMENTS.LOAN_ID.eq(loanId))
@@ -304,6 +384,20 @@ public class LoanRepository {
                 record.getInterestPortion(),
                 record.getPrincipalPortion(),
                 record.getOutstandingPrincipalAfter(),
+                record.getJournalEntryId(),
+                record.getCreatedAt());
+    }
+
+    private static LoanWriteOff toLoanWriteOff(io.github.ivarm1984.banksim.jooq.loan.tables.records.LoanWriteOffsRecord record) {
+        return new LoanWriteOff(
+                record.getId(),
+                record.getLoanId(),
+                record.getWriteOffDate(),
+                record.getDefaultedSince(),
+                record.getOutstandingPrincipal(),
+                record.getRecoveryAmount(),
+                record.getWrittenOffAmount(),
+                record.getAllowanceUsed(),
                 record.getJournalEntryId(),
                 record.getCreatedAt());
     }

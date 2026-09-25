@@ -8,13 +8,15 @@ import org.springframework.stereotype.Service;
 
 import io.github.ivarm1984.banksim.clock.DayRolledOverEvent;
 import io.github.ivarm1984.banksim.loan.LoanStagingService;
+import io.github.ivarm1984.banksim.loan.LoanWriteOffService;
 
 /**
  * Drives EventInjector's daily steps, in order: recession tick first (its
  * state biases the rate shock's direction and feeds the forward-looking
  * PDs), then the rate shock roll, then - if the recession just started or
  * ended - a book-wide ECL remeasurement under the new macro scenario, and
- * finally the daily days-past-due staging pass. Each step is independently
+ * the daily days-past-due staging pass, and finally the write-off pass for
+ * loans that have sat in default too long. Each step is independently
  * try/caught so one failing step never blocks the others.
  */
 @Service
@@ -25,13 +27,15 @@ public class EventInjectorScheduler {
     private final RateShockService rateShockService;
     private final RecessionShockService recessionShockService;
     private final LoanStagingService loanStagingService;
+    private final LoanWriteOffService loanWriteOffService;
 
     public EventInjectorScheduler(
             RateShockService rateShockService, RecessionShockService recessionShockService,
-            LoanStagingService loanStagingService) {
+            LoanStagingService loanStagingService, LoanWriteOffService loanWriteOffService) {
         this.rateShockService = rateShockService;
         this.recessionShockService = recessionShockService;
         this.loanStagingService = loanStagingService;
+        this.loanWriteOffService = loanWriteOffService;
     }
 
     @EventListener
@@ -63,6 +67,12 @@ public class EventInjectorScheduler {
             loanStagingService.evaluateDaily(event.newDate(), recessionActive);
         } catch (Exception e) {
             log.warn("Loan staging pass failed for {}", event.newDate(), e);
+        }
+
+        try {
+            loanWriteOffService.writeOffDaily(event.newDate());
+        } catch (Exception e) {
+            log.warn("Loan write-off pass failed for {}", event.newDate(), e);
         }
     }
 }

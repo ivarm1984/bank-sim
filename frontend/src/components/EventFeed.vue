@@ -29,6 +29,12 @@ interface LoanOriginatedPayload {
   loanType: 'MORTGAGE' | 'CONSUMER'
   principal: number
 }
+interface LoanWrittenOffPayload {
+  loanId: number
+  loanType: 'MORTGAGE' | 'CONSUMER' | 'BUSINESS'
+  outstandingPrincipal: number
+  recoveryAmount: number
+}
 interface LoanRepaidPayload {
   loanId: number
   amount: number
@@ -63,6 +69,13 @@ function describe(type: string, payload: unknown): { text: string; tone: 'credit
     case 'LOAN_REPAID': {
       const p = payload as LoanRepaidPayload
       return { text: `Loan ${p.loanId} paid off with a final payment of ${formatCurrency(p.amount)}`, tone: 'credit' }
+    }
+    case 'LOAN_WRITTEN_OFF': {
+      const p = payload as LoanWrittenOffPayload
+      return {
+        text: `Loan ${p.loanId} written off: ${formatCurrency(p.outstandingPrincipal)} outstanding, ${formatCurrency(p.recoveryAmount)} recovered`,
+        tone: 'debit',
+      }
     }
     default:
       return { text: type, tone: 'neutral' }
