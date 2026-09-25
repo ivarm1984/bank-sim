@@ -112,3 +112,13 @@ in the `liquibase { activities { main { ... } } }` block — never point
 - Docker Desktop must be running before `docker compose up -d` (Postgres),
   any Gradle task that touches the dev DB (`update`, `generateJooq`, tests —
   tests need it for Testcontainers, not for the dev DB itself), or `bootRun`.
+
+## Privacy: never expose the owner's personal email
+This repository is public. The owner's personal email address must never
+appear in commits, files, or anything pushed to GitHub.
+- Author and commit only as `Ivar Mällas <5469913+ivarm1984@users.noreply.github.com>`
+  (GitHub's private noreply address). The repo's local `user.email` is set to
+  this; don't override it with a different config or a `--author` flag.
+- Before committing, check `git config user.email` returns the noreply address.
+- Never write a personal email address into source, docs, config, commit
+  messages, or PR descriptions.
