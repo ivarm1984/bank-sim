@@ -834,6 +834,101 @@ session: CEO.1 (below) → CEO.2 (`BankHealthService` + win condition) → CEO.3
     `Dashboard`/`CEO mode` nav links round-tripped between both views with no
     console errors and the existing M5 dashboard unaffected.
 
+### CEO.5 — Review fixes (code + EU-banking logic)
+Findings from a review of CEO.1–CEO.4 (`2114110..fba5b91`). Correctness bugs
+first (most severe on top), then places where the model diverges from how EU
+banking actually works.
+
+**Correctness bugs**
+- [ ] Provisions don't affect capital/CAR: `TreasuryService.currentBalances()`
+      builds `capitalBase` as `BANK_CAPITAL + INTEREST_INCOME + FEE_INCOME −
+      INTEREST_EXPENSE`, never subtracting `PROVISION_EXPENSE`, and RWA uses gross
+      `LOAN_RECEIVABLE` rather than net of `LOAN_LOSS_PROVISION` - so a recession
+      moving half the BUSINESS book to NON_PERFORMING leaves CAR/NSFR/bank health
+      unchanged; CEO.3's shocks are cosmetic until this is fixed
+- [ ] Provisions never released on payoff, and go stale during amortization:
+      `LoanService.repay`/`updateAfterPayment` never touch `provision_amount`, and
+      `findActiveByLoanType` only returns ACTIVE loans - so a NON_PERFORMING loan
+      that repays to PAID_OFF strands its provision in `LOAN_LOSS_PROVISION`
+      forever; meanwhile a 50% provision on the original principal can exceed the
+      remaining exposure (contra-asset > receivable). Recompute on each repayment,
+      fully release on payoff
+- [ ] `DAY_ROLLED_OVER` WS message races ahead of the EOD chain:
+      `ClockService.advanceAndPublish` isn't transactional, so
+      `EventFeedPublisher.onDayRolledOver` (`@Async` + `fallbackExecution = true`)
+      sends immediately while the synchronous interest → statements → treasury →
+      bank-health chain is still running - `BankHealthPanel`/`TreasuryRatiosPanel`
+      reload stale data (masked by the near-empty DB in CEO.4's live test). Bridge
+      `BankHealthUpdatedEvent`/`TreasuryRatiosUpdatedEvent` to the WS feed and
+      reload off those instead
+- [ ] CEO-view WS subscriptions never attach after client-side navigation:
+      `stompClient.subscribe()` only pushes onto the on-(re)connect list, so
+      panels mounted on `/ceo` after the socket is already connected never
+      subscribe until a reconnect; and with no unsubscribe on unmount, every past
+      mount's handler piles up as a duplicate after a reconnect
+- [ ] Rate-shock offset accumulates past the clamp: `CentralBankService` clamps
+      `base + Σdeltas`, but the sum itself is unbounded - after a run of hikes the
+      offset sits far above `MAX_POLICY_RATE` and later cuts are invisible for
+      years. Clamp/mean-revert the offset; also `currentRates()` now runs a SQL
+      `SUM` on every call
+- [ ] `LoanPhaseTransitionService.rollDailyTransitions` is one transaction with no
+      row locks - one failing loan rolls back every BUSINESS loan's transition for
+      the day, and it reads `outstandingPrincipal` without `lockForUpdate` (unlike
+      `repay`), so a concurrent repayment makes the provision be computed from a
+      stale figure
+- [ ] Undefined `DayRolledOverEvent` listener order: `EventInjectorScheduler`,
+      `InterestAccrualScheduler` and `TreasuryRatioScheduler` have no `@Order`, so
+      whether a day-D rate shock affects day-D savings accrual depends on bean
+      registration order
+- [ ] Minor: a negative savings rate (policy 0% + spread −5%) is silently treated
+      as 0% (`accrualAmount` with `signum > 0` is skipped) while the UI shows it
+      negative; `PolicyLeversPanel`'s `x*100`/`x/100` float round-trip can show
+      values like `7.000000000000001`; `underwritingLooseness` is shown in the UI as
+      a lever even though nothing consumes it
+
+**EU-banking logic**
+- [ ] Game over is judged against the CEO's own buffer, not the regulatory
+      minimum: `isCapitalBreach` adds `targetCapitalBuffer` to the thresholds and
+      `BankHealthService` counts that throttle as a regulatory breach - so a *more*
+      prudent CEO reaches `GAME_OVER` sooner. Throttle on the management target,
+      but warn/fail on the regulatory stack: Pillar 1 minimum of 8% + P2R +
+      combined buffer requirement (capital conservation buffer alone is 2.5%).
+      Breaching the combined buffer → MDA restrictions (CRD Art. 141) = `WARNING`;
+      breaching the total requirement → failing-or-likely-to-fail (BRRD Art. 32) =
+      `GAME_OVER`
+- [ ] NSFR is treated as a capital breach: NSFR is a structural funding/liquidity
+      ratio (CRR2 Art. 428b), not a resolution trigger the way a capital
+      shortfall is; and adding the capital buffer to it as a flat % (2% buffer →
+      NSFR ≥ 102%) mixes two unrelated concepts
+- [ ] Make the staging real IFRS 9 (ties into "Loan-loss provisioning" under
+      Complex additions): Stage 1 (performing) always carries a 12-month
+      expected-credit-loss provision (not 0); Stage 2 lifetime ECL (not a flat
+      10%); IFRS 9 covers every amortised-cost loan, so apply it to MORTGAGE/
+      CONSUMER too and let recessions hit them; Stage 3 interest income recognised
+      on the net carrying amount rather than full accrual
+- [ ] "Non-performing" contradicts the EU definition (ties into "Loan
+      default/delinquency simulation" under Complex additions): per CRR Art. 178 /
+      EBA default guidelines / EBA NPE definition, a loan is non-performing when
+      it's 90+ days past due or unlikely to pay - here a NON_PERFORMING loan keeps
+      paying on time. Recovery is a 1%-per-day roll; EU rules require a minimum
+      3-month probation before leaving default, 1 year for forborne exposures
+- [ ] Risk weights ignore credit quality: defaulted exposures should be
+      risk-weighted at 150% when specific provisions are under 20% (CRR Art. 127),
+      and exposures should be net of specific credit risk adjustments (Art. 111).
+      Pre-existing: mortgages are weighted at 100% instead of the standardised 35%
+      for residential mortgages (Art. 125), which makes the bank look far more
+      capital-constrained than a real retail bank
+- [ ] An unlimited central-bank facility makes liquidity failure impossible:
+      with `autoTapBorrowingFacility` on the bank can never fail on liquidity. ECB
+      marginal lending requires eligible collateral with haircuts - cap draws by
+      unencumbered eligible assets so a bank run is a real risk, not an opt-in
+- [ ] Rate shocks are independent of recessions: in the euro area recessions
+      usually bring ECB cuts, and hikes come with inflation. Bias shock direction
+      by recession state so margin compression coincides with credit losses
+- [ ] Winning ignores profitability: you can win at 5 years with zero lending and
+      zero profit. Add a requirement such as positive retained earnings or a
+      minimum return on equity so "do nothing" isn't the winning strategy
+
 ## Complex additions (deferred domain depth)
 
 Deliberately simplified in M6 above — revisit once the simple version works
