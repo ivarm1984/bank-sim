@@ -6,6 +6,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
 import io.github.ivarm1984.banksim.account.Account;
@@ -39,6 +40,7 @@ public class InterestAccrualScheduler {
     }
 
     @EventListener
+    @Order(DayRolledOverEvent.ORDER_INTEREST_ACCRUAL)
     public void onDayRolledOver(DayRolledOverEvent event) {
         var ratesByType = interestAccrualService.currentRates();
         for (List<Account> chunk : partition(accountService.findAll(), CHUNK_SIZE)) {

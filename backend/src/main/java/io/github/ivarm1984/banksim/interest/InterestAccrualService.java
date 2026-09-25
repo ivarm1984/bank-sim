@@ -156,7 +156,15 @@ public class InterestAccrualService {
         return type == AccountType.SAVINGS ? savingsRate() : ratePolicyRepository.findAnnualRate(type);
     }
 
+    /**
+     * Floored at zero: a spread below the policy rate (e.g. policy 0% +
+     * spread -5%) would otherwise produce a negative rate that the daily
+     * accrual silently skips while the rate itself is still reported
+     * negative. Retail deposits in the euro area were effectively never
+     * charged negative rates even during the ECB's negative-rate era, so 0%
+     * is the rate actually applied and reported.
+     */
     private BigDecimal savingsRate() {
-        return centralBankService.currentRates().policyRate().add(policyLevers.state().savingsRateSpread());
+        return centralBankService.currentRates().policyRate().add(policyLevers.state().savingsRateSpread()).max(BigDecimal.ZERO);
     }
 }

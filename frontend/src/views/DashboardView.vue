@@ -9,26 +9,21 @@ import TransactionLog from '../components/TransactionLog.vue'
 import StatementViewer from '../components/StatementViewer.vue'
 import { useAccountsStore } from '../stores/accounts'
 import { useCustomersStore } from '../stores/customers'
-import { useClockStore } from '../stores/clock'
-import { useEventFeedStore } from '../stores/eventFeed'
 import { subscribe } from '../ws/stompClient'
-import type { ClockSnapshot, EventFeedMessage } from '../api/types'
+import type { EventFeedMessage } from '../api/types'
 
 const accounts = useAccountsStore()
 const customers = useCustomersStore()
-const clock = useClockStore()
-const eventFeed = useEventFeedStore()
 
 const DRIFT_RESYNC_MS = 10_000
 let resyncHandle: ReturnType<typeof setInterval> | undefined
+let unsubscribe: (() => void) | undefined
 
 onMounted(() => {
   customers.load()
   accounts.load()
 
-  subscribe<ClockSnapshot>('/topic/clock', clock.patch)
-  subscribe<EventFeedMessage>('/topic/events', (message) => {
-    eventFeed.push(message)
+  unsubscribe = subscribe<EventFeedMessage>('/topic/events', (message) => {
     // Not on TRANSACTION_COMPLETED - at seed scale that fires far too often for a full refetch;
     // the periodic resync below keeps the current page fresh instead.
     if (message.type === 'INTEREST_ACCRUAL_BATCH_COMPLETED') {
@@ -39,7 +34,10 @@ onMounted(() => {
   resyncHandle = setInterval(() => accounts.load(), DRIFT_RESYNC_MS)
 })
 
-onUnmounted(() => clearInterval(resyncHandle))
+onUnmounted(() => {
+  clearInterval(resyncHandle)
+  unsubscribe?.()
+})
 </script>
 
 <template>

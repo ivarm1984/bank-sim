@@ -1,10 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useClockStore } from '../stores/clock'
+import { subscribe } from '../ws/stompClient'
+import type { ClockSnapshot } from '../api/types'
 import { formatDateTime } from '../utils/format'
 
 const clock = useClockStore()
 const speedInput = ref(clock.state?.speed ?? 60)
+
+// Lives in the shared header (mounted on every view), so the clock keeps ticking live on /ceo too.
+const unsubscribe = subscribe<ClockSnapshot>('/topic/clock', clock.patch)
+onUnmounted(unsubscribe)
 
 onMounted(async () => {
   await clock.load()

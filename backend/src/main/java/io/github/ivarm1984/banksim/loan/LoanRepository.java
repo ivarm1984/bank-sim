@@ -131,6 +131,13 @@ public class LoanRepository {
                 .execute();
     }
 
+    public void updateProvision(long loanId, BigDecimal provisionAmount) {
+        dsl.update(LOANS)
+                .set(LOANS.PROVISION_AMOUNT, provisionAmount)
+                .where(LOANS.ID.eq(loanId))
+                .execute();
+    }
+
     public LoanPhaseTransition insertPhaseHistory(
             long loanId, LoanPhase fromPhase, LoanPhase toPhase, LocalDate transitionDate, BigDecimal provisionDelta,
             Long journalEntryId) {

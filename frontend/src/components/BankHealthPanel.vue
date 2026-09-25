@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { fetchBankHealth } from '../api/bankHealth'
 import type { BankHealthSnapshot, EventFeedMessage } from '../api/types'
 import { subscribe } from '../ws/stompClient'
@@ -10,12 +10,16 @@ async function reload() {
   health.value = await fetchBankHealth()
 }
 
+let unsubscribe: (() => void) | undefined
+
 onMounted(() => {
   reload()
-  subscribe<EventFeedMessage>('/topic/events', (message) => {
-    if (message.type === 'DAY_ROLLED_OVER') reload()
+  unsubscribe = subscribe<EventFeedMessage>('/topic/events', (message) => {
+    if (message.type === 'BANK_HEALTH_UPDATED') reload()
   })
 })
+
+onUnmounted(() => unsubscribe?.())
 
 const statusColor: Record<string, string> = {
   PLAYING: 'text-credit',

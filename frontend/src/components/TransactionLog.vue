@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { fetchTransactions } from '../api/transactions'
 import type { EventFeedMessage, Transaction } from '../api/types'
 import { subscribe } from '../ws/stompClient'
@@ -11,12 +11,16 @@ async function reload() {
   transactions.value = (await fetchTransactions()).sort((a, b) => b.id - a.id)
 }
 
+let unsubscribe: (() => void) | undefined
+
 onMounted(() => {
   reload()
-  subscribe<EventFeedMessage>('/topic/events', (message) => {
+  unsubscribe = subscribe<EventFeedMessage>('/topic/events', (message) => {
     if (message.type === 'TRANSACTION_COMPLETED') reload()
   })
 })
+
+onUnmounted(() => unsubscribe?.())
 
 const toneClass: Record<Transaction['type'], string> = {
   DEPOSIT: 'text-credit',

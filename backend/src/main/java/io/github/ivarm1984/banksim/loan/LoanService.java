@@ -65,11 +65,12 @@ public class LoanService {
     private final DomainEventPublisher events;
     private final TreasuryService treasuryService;
     private final PolicyLevers policyLevers;
+    private final LoanProvisionPoster provisionPoster;
 
     public LoanService(
             LoanRepository loanRepository, LedgerService ledgerService, LedgerAccountService ledgerAccountService,
             CentralBankService centralBankService, ClockService clockService, DomainEventPublisher events,
-            TreasuryService treasuryService, PolicyLevers policyLevers) {
+            TreasuryService treasuryService, PolicyLevers policyLevers, LoanProvisionPoster provisionPoster) {
         this.loanRepository = loanRepository;
         this.ledgerService = ledgerService;
         this.ledgerAccountService = ledgerAccountService;
@@ -78,6 +79,7 @@ public class LoanService {
         this.events = events;
         this.treasuryService = treasuryService;
         this.policyLevers = policyLevers;
+        this.provisionPoster = provisionPoster;
     }
 
     /**
@@ -221,12 +223,32 @@ public class LoanService {
         }
 
         loanRepository.updateAfterPayment(loanId, newOutstandingPrincipal, nextInstallmentNumber, newStatus);
+        remeasureProvision(loan, newOutstandingPrincipal, paidOff);
         LocalDate paymentDate = clockService.state().simulatedTime().toLocalDate();
         LoanPayment payment = loanRepository.insertPayment(
                 loanId, paymentDate, type, amountCharged, interestDue, principalPortion, newOutstandingPrincipal, journalEntryId);
 
         events.publish(new LoanRepaidEvent(loanId, type, amountCharged, principalPortion, interestDue, newOutstandingPrincipal, paidOff));
         return payment;
+    }
+
+    /**
+     * Keeps the loan-loss provision in step with the exposure it covers: a
+     * phase's provision rate applies to the *current* outstanding principal,
+     * so every repayment shrinks it (never leaving the contra-asset larger
+     * than the receivable), and a payoff releases whatever is left in full.
+     */
+    private void remeasureProvision(LoanAccount loan, BigDecimal newOutstandingPrincipal, boolean paidOff) {
+        BigDecimal newProvision = paidOff
+                ? BigDecimal.ZERO
+                : LoanPhaseTransitionService.provisionAmount(loan.phase(), newOutstandingPrincipal);
+        BigDecimal delta = newProvision.subtract(loan.provisionAmount());
+        if (delta.signum() == 0) {
+            return;
+        }
+        provisionPoster.post(delta, "Loan " + loan.id() + " provision remeasured after repayment"
+                + (paidOff ? " (paid off - released in full)" : ""));
+        loanRepository.updateProvision(loan.id(), newProvision);
     }
 
     public LoanAccount findById(long loanId) {

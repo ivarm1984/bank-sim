@@ -8,7 +8,8 @@ import java.time.OffsetDateTime;
  * One day's simplified treasury ratio snapshot. Ratio fields are nullable -
  * {@code null} means "not applicable yet" (a zero denominator, e.g.
  * net-stable-funding/capital-adequacy before any loan has been originated),
- * not zero or an error.
+ * not zero or an error. {@code loansReceivable} is gross; NSFR/CAR are
+ * computed on the net carrying amount, {@link #netLoans()}.
  */
 public record TreasuryRatioSnapshot(
         Long id,
@@ -16,6 +17,7 @@ public record TreasuryRatioSnapshot(
         BigDecimal bankCash,
         BigDecimal centralBankReserves,
         BigDecimal loansReceivable,
+        BigDecimal loanLossProvision,
         BigDecimal customerDeposits,
         BigDecimal capitalBase,
         BigDecimal loanToDepositRatio,
@@ -25,4 +27,9 @@ public record TreasuryRatioSnapshot(
         BigDecimal reserveCoverageRatio,
         BigDecimal capitalAdequacyRatio,
         OffsetDateTime createdAt) {
+
+    /** Gross loans receivable less the loan-loss provision contra-asset. */
+    public BigDecimal netLoans() {
+        return loansReceivable.subtract(loanLossProvision);
+    }
 }

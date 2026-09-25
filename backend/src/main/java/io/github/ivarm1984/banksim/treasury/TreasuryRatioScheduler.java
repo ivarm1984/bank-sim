@@ -3,6 +3,7 @@ package io.github.ivarm1984.banksim.treasury;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
 import io.github.ivarm1984.banksim.clock.DayRolledOverEvent;
@@ -29,6 +30,7 @@ public class TreasuryRatioScheduler {
     }
 
     @EventListener
+    @Order(DayRolledOverEvent.ORDER_TREASURY_BORROWING_INTEREST)
     public void onDayRolledOver(DayRolledOverEvent event) {
         try {
             treasuryService.accrueBorrowingInterest(event.newDate());

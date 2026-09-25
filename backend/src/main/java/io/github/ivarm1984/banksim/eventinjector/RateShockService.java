@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import io.github.ivarm1984.banksim.centralbank.CentralBankRateSchedule;
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
 
 /**
@@ -18,6 +19,13 @@ import io.github.ivarm1984.banksim.event.DomainEventPublisher;
  * deltas (see {@link RateShockRepository}), so the deterministic
  * {@code CentralBankRateSchedule} base rate stays a pure function of date;
  * the shock is layered on top in {@code CentralBankService.currentRates()}.
+ *
+ * <p>Each shock's persisted delta is clamped so that base + offset lands
+ * inside the policy-rate bounds on the shock date. Without that, a run of
+ * hikes piled up an offset far above {@code MAX_POLICY_RATE} - the effective
+ * rate sat pinned at the cap and later cuts were invisible for years. A shock
+ * that would move nothing (a hike at the cap, a cut at the floor) isn't
+ * recorded at all.
  */
 @Service
 public class RateShockService {
@@ -30,17 +38,19 @@ public class RateShockService {
     static final BigDecimal SHOCK_MAGNITUDE = new BigDecimal("0.0075");
 
     private final RateShockRepository repository;
+    private final CentralBankRateSchedule schedule;
     private final DomainEventPublisher events;
     private final Random random;
 
     @Autowired
-    public RateShockService(RateShockRepository repository, DomainEventPublisher events) {
-        this(repository, events, new Random());
+    public RateShockService(RateShockRepository repository, CentralBankRateSchedule schedule, DomainEventPublisher events) {
+        this(repository, schedule, events, new Random());
     }
 
     /** Test seam - lets tests force/deny a shock deterministically. */
-    RateShockService(RateShockRepository repository, DomainEventPublisher events, Random random) {
+    RateShockService(RateShockRepository repository, CentralBankRateSchedule schedule, DomainEventPublisher events, Random random) {
         this.repository = repository;
+        this.schedule = schedule;
         this.events = events;
         this.random = random;
     }
@@ -50,16 +60,26 @@ public class RateShockService {
         if (random.nextDouble() >= DAILY_PROBABILITY) {
             return;
         }
-        BigDecimal delta = random.nextBoolean() ? SHOCK_MAGNITUDE : SHOCK_MAGNITUDE.negate();
+        BigDecimal requested = random.nextBoolean() ? SHOCK_MAGNITUDE : SHOCK_MAGNITUDE.negate();
+        BigDecimal base = schedule.ratesOn(date).policyRate();
+        BigDecimal offsetBefore = repository.sumDeltaOnOrBefore(date);
+        BigDecimal effectiveBefore = CentralBankRateSchedule.clamp(base.add(offsetBefore));
+        BigDecimal effectiveAfter = CentralBankRateSchedule.clamp(effectiveBefore.add(requested));
+        if (effectiveAfter.compareTo(effectiveBefore) == 0) {
+            return;
+        }
+        // Re-anchors the offset so base + offset == effectiveAfter exactly - also
+        // pulling back any excess the base schedule's own drift left beyond a bound.
+        BigDecimal delta = effectiveAfter.subtract(base).subtract(offsetBefore);
         repository.insert(date, delta);
-        BigDecimal cumulativeOffset = repository.sumDeltaOnOrBefore(date);
+        BigDecimal cumulativeOffset = offsetBefore.add(delta);
         log.info("Rate shock triggered on {}: delta {}, cumulative offset {}", date, delta, cumulativeOffset);
         events.publish(new RateShockTriggeredEvent(date, delta, cumulativeOffset));
     }
 
     /** Effective rate offset as of {@code asOfDate} - the sum of every shock dated on or before it. */
     public BigDecimal offsetAsOf(LocalDate asOfDate) {
-        return repository.sumDeltaOnOrBefore(asOfDate);
+        return repository.offsetAsOf(asOfDate);
     }
 
     public List<RateShock> history() {

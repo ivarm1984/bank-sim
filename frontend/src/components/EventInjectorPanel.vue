@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { fetchEventInjectorStatus } from '../api/eventInjector'
 import type { EventFeedMessage, EventInjectorStatus } from '../api/types'
 import { subscribe } from '../ws/stompClient'
@@ -11,12 +11,16 @@ async function reload() {
   status.value = await fetchEventInjectorStatus()
 }
 
+let unsubscribe: (() => void) | undefined
+
 onMounted(() => {
   reload()
-  subscribe<EventFeedMessage>('/topic/events', (message) => {
+  unsubscribe = subscribe<EventFeedMessage>('/topic/events', (message) => {
     if (['RATE_SHOCK_TRIGGERED', 'RECESSION_STARTED', 'RECESSION_ENDED'].includes(message.type)) reload()
   })
 })
+
+onUnmounted(() => unsubscribe?.())
 </script>
 
 <template>

@@ -837,56 +837,81 @@ session: CEO.1 (below) → CEO.2 (`BankHealthService` + win condition) → CEO.3
 ### CEO.5 — Review fixes (code + EU-banking logic)
 Findings from a review of CEO.1–CEO.4 (`2114110..fba5b91`). Correctness bugs
 first (most severe on top), then places where the model diverges from how EU
-banking actually works.
+banking actually works. Split via `AskUserQuestion` into CEO.5a (the bugs,
+committed and verified on their own) and CEO.5b (EU logic).
 
-**Correctness bugs**
-- [ ] Provisions don't affect capital/CAR: `TreasuryService.currentBalances()`
-      builds `capitalBase` as `BANK_CAPITAL + INTEREST_INCOME + FEE_INCOME −
-      INTEREST_EXPENSE`, never subtracting `PROVISION_EXPENSE`, and RWA uses gross
-      `LOAN_RECEIVABLE` rather than net of `LOAN_LOSS_PROVISION` - so a recession
-      moving half the BUSINESS book to NON_PERFORMING leaves CAR/NSFR/bank health
-      unchanged; CEO.3's shocks are cosmetic until this is fixed
-- [ ] Provisions never released on payoff, and go stale during amortization:
-      `LoanService.repay`/`updateAfterPayment` never touch `provision_amount`, and
-      `findActiveByLoanType` only returns ACTIVE loans - so a NON_PERFORMING loan
-      that repays to PAID_OFF strands its provision in `LOAN_LOSS_PROVISION`
-      forever; meanwhile a 50% provision on the original principal can exceed the
-      remaining exposure (contra-asset > receivable). Recompute on each repayment,
-      fully release on payoff
-- [ ] `DAY_ROLLED_OVER` WS message races ahead of the EOD chain:
-      `ClockService.advanceAndPublish` isn't transactional, so
-      `EventFeedPublisher.onDayRolledOver` (`@Async` + `fallbackExecution = true`)
-      sends immediately while the synchronous interest → statements → treasury →
-      bank-health chain is still running - `BankHealthPanel`/`TreasuryRatiosPanel`
-      reload stale data (masked by the near-empty DB in CEO.4's live test). Bridge
-      `BankHealthUpdatedEvent`/`TreasuryRatiosUpdatedEvent` to the WS feed and
-      reload off those instead
-- [ ] CEO-view WS subscriptions never attach after client-side navigation:
-      `stompClient.subscribe()` only pushes onto the on-(re)connect list, so
-      panels mounted on `/ceo` after the socket is already connected never
-      subscribe until a reconnect; and with no unsubscribe on unmount, every past
-      mount's handler piles up as a duplicate after a reconnect
-- [ ] Rate-shock offset accumulates past the clamp: `CentralBankService` clamps
-      `base + Σdeltas`, but the sum itself is unbounded - after a run of hikes the
-      offset sits far above `MAX_POLICY_RATE` and later cuts are invisible for
-      years. Clamp/mean-revert the offset; also `currentRates()` now runs a SQL
-      `SUM` on every call
-- [ ] `LoanPhaseTransitionService.rollDailyTransitions` is one transaction with no
-      row locks - one failing loan rolls back every BUSINESS loan's transition for
-      the day, and it reads `outstandingPrincipal` without `lockForUpdate` (unlike
-      `repay`), so a concurrent repayment makes the provision be computed from a
-      stale figure
-- [ ] Undefined `DayRolledOverEvent` listener order: `EventInjectorScheduler`,
-      `InterestAccrualScheduler` and `TreasuryRatioScheduler` have no `@Order`, so
-      whether a day-D rate shock affects day-D savings accrual depends on bean
-      registration order
-- [ ] Minor: a negative savings rate (policy 0% + spread −5%) is silently treated
-      as 0% (`accrualAmount` with `signum > 0` is skipped) while the UI shows it
-      negative; `PolicyLeversPanel`'s `x*100`/`x/100` float round-trip can show
-      values like `7.000000000000001`; `underwritingLooseness` is shown in the UI as
-      a lever even though nothing consumes it
+#### CEO.5a — Correctness bugs ✅ done
+- [x] Provisions don't affect capital/CAR: `TreasuryService.currentBalances()`
+      built `capitalBase` without `PROVISION_EXPENSE` and RWA on gross
+      `LOAN_RECEIVABLE`, so CEO.3's recession shocks were cosmetic
+  - `capitalBase` now subtracts the net `PROVISION_EXPENSE` balance; NSFR's RSF
+    and CAR's RWA use the net carrying amount (`loansReceivable −
+    loanLossProvision`). LDR stays on gross loans. New
+    `ratio_snapshots.loan_loss_provision` column (`treasury-0003`) +
+    `TreasuryRatioSnapshot.netLoans()`, so the net figure is visible via REST
+- [x] Provisions never released on payoff, and went stale during amortization
+  - `LoanService.repay` now remeasures the provision against the new
+    outstanding principal after every payment and releases it in full on
+    payoff. The ledger posting moved to a shared package-private
+    `LoanProvisionPoster`, used by both repay and the phase-transition roll
+- [x] `DAY_ROLLED_OVER` WS message raced ahead of the EOD chain
+  - `EventFeedPublisher` now bridges `TreasuryRatiosUpdatedEvent` →
+    `TREASURY_RATIOS_UPDATED` and `BankHealthUpdatedEvent` →
+    `BANK_HEALTH_UPDATED` (both `AFTER_COMMIT`); `TreasuryRatiosPanel`/
+    `BankHealthPanel` reload off those instead
+- [x] CEO-view WS subscriptions never attached after client-side navigation
+  - `stompClient.subscribe()` attaches immediately when already connected and
+    returns an unsubscribe function; every caller unsubscribes in
+    `onUnmounted`. Since that ended the dashboard's leaked subscriptions, the
+    `/topic/clock` subscription moved into the shared `SimulationControls`
+    header, and the event-feed store's push into `App.vue` (app-lifetime), so
+    the header clock and the feed stats keep working on `/ceo`
+- [x] Rate-shock offset accumulated past the clamp
+  - `RateShockService` now applies each shock to the *effective* (clamped)
+    rate and persists the delta that re-anchors `base + offset` to it. A shock
+    that would move nothing (hike at the cap, cut at the floor) isn't recorded.
+    `RateShockRepository.offsetAsOf` caches the last (date, offset) read;
+    `insert` invalidates it
+- [x] `rollDailyTransitions` was one transaction with no row locks
+  - Now one `TransactionTemplate` transaction per loan, each re-reading the row
+    under `lockForUpdate` (skipping loans paid off in the meantime), with a
+    per-loan try/catch
+- [x] Undefined `DayRolledOverEvent` listener order
+  - Explicit `@Order` constants on `DayRolledOverEvent`: event injector (10) →
+    treasury facility interest (20, so it's in the ledger before the snapshot)
+    → customer interest accrual (30, last, since it synchronously chains
+    statements → treasury snapshot → bank health)
+- [x] Minor: negative savings rate / float round-trip / `underwritingLooseness`
+  - `InterestAccrualService.savingsRate()` is floored at 0% (retail deposits
+    in the euro area were effectively never charged negative rates), so the
+    reported and applied rates agree; `PolicyLeversPanel` rounds the
+    percent↔fraction conversion to a basis point both ways; the
+    `underwritingLooseness` input is removed from the panel (the full-replace
+    POST carries the stored value through unchanged)
+- Verify: `./gradlew test`: 102 tests pass, including new
+  `TreasuryServiceTest.aProvisionChargeLowersTheCapitalBaseAndTheNetLoanBook`,
+  `LoanPhaseTransitionServiceTest.repaymentRemeasuresTheProvisionAndPayoffReleasesItInFull`,
+  `RateShockServiceTest.aCutAfterAnOffsetPastTheCapMovesTheEffectiveRateDownImmediately`
+  and `InterestAccrualServiceTest.savingsRateIsFlooredAtZeroWhenTheSpreadExceedsThePolicyRate`.
+  `npm run build` clean. Live in Chrome (fresh dev DB): loaded `/`, navigated
+  client-side to `/ceo` (no reload), and stepped days. The header clock
+  advanced, and `BankHealthPanel`/`TreasuryRatiosPanel` filled in live with
+  snapshot dates matching the clock (`Playing` 0/0, CAR 18.70%). The underwriting
+  lever was gone and the savings spread showed a clean `-1.5`; no console
+  errors; `GET /api/treasury/ratios` included `loanLossProvision`;
+  `GET /api/ledger/trial-balance` stayed balanced
 
-**EU-banking logic**
+#### CEO.5b — EU-banking logic
+Design calls made via `AskUserQuestion`:
+(1) delinquency is **payment-driven days-past-due** for every loan type:
+`BorrowerAgent` misses installments on a roll that rises in a recession;
+30+ DPD → Stage 2, 90+ DPD → Stage 3/default; a defaulted loan cures only after a
+3-month on-time probation. This replaces the random phase roll.
+(2) Capital stack: Pillar 1 8% + P2R 2% = TSCR 10%, + 2.5% capital
+conservation buffer = OCR 12.5%. Below OCR for 5 days → `WARNING` (MDA);
+below TSCR for 10 days → `GAME_OVER` (FOLTF); the CEO's buffer only throttles
+lending. (3) Winning also requires an average annual **ROE ≥ 5%**.
+
 - [ ] Game over is judged against the CEO's own buffer, not the regulatory
       minimum: `isCapitalBreach` adds `targetCapitalBuffer` to the thresholds and
       `BankHealthService` counts that throttle as a regulatory breach - so a *more*

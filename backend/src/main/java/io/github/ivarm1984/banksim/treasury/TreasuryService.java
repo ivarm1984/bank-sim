@@ -91,12 +91,13 @@ public class TreasuryService {
         BigDecimal estimatedThirtyDayOutflow = b.customerDeposits().multiply(LCR_OUTFLOW_RATE);
         BigDecimal hqla = b.bankCash().add(b.centralBankReserves());
         BigDecimal availableStableFunding = b.capitalBase().add(b.customerDeposits().multiply(NSFR_DEPOSIT_ASF_FACTOR));
-        BigDecimal requiredStableFunding = b.loansReceivable().multiply(NSFR_LOAN_RSF_FACTOR);
-        BigDecimal riskWeightedAssets = b.loansReceivable().multiply(LOAN_RISK_WEIGHT);
+        BigDecimal requiredStableFunding = b.netLoans().multiply(NSFR_LOAN_RSF_FACTOR);
+        BigDecimal riskWeightedAssets = b.netLoans().multiply(LOAN_RISK_WEIGHT);
 
         return repository.insert(
                 date,
-                b.bankCash(), b.centralBankReserves(), b.loansReceivable(), b.customerDeposits(), b.capitalBase(),
+                b.bankCash(), b.centralBankReserves(), b.loansReceivable(), b.loanLossProvision(), b.customerDeposits(),
+                b.capitalBase(),
                 ratio(b.loansReceivable(), b.customerDeposits()),
                 ratio(hqla, estimatedThirtyDayOutflow),
                 ratio(availableStableFunding, requiredStableFunding),
@@ -236,13 +237,17 @@ public class TreasuryService {
         BigDecimal interestIncome = creditTotal(balances, LedgerAccountType.INTEREST_INCOME);
         BigDecimal feeIncome = creditTotal(balances, LedgerAccountType.FEE_INCOME);
         BigDecimal interestExpense = debitTotal(balances, LedgerAccountType.INTEREST_EXPENSE);
+        BigDecimal provisionExpense = debitTotal(balances, LedgerAccountType.PROVISION_EXPENSE);
+        BigDecimal loanLossProvision = creditTotal(balances, LedgerAccountType.LOAN_LOSS_PROVISION);
 
         // No retained-earnings sweep exists in this system - income/expense ledger
         // accounts stay permanent rather than closing into BANK_CAPITAL - so net
-        // income to date is added in directly as the capital-adequacy proxy.
-        BigDecimal capitalBase = bankCapital.add(interestIncome).add(feeIncome).subtract(interestExpense);
+        // income to date (after provisioning expense, net of releases) is added in
+        // directly as the capital-adequacy proxy.
+        BigDecimal capitalBase = bankCapital.add(interestIncome).add(feeIncome)
+                .subtract(interestExpense).subtract(provisionExpense);
 
-        return new Balances(bankCash, centralBankReserves, loansReceivable, customerDeposits, capitalBase);
+        return new Balances(bankCash, centralBankReserves, loansReceivable, loanLossProvision, customerDeposits, capitalBase);
     }
 
     private static BigDecimal debitTotal(List<LedgerAccountBalance> balances, LedgerAccountType type) {
@@ -268,7 +273,12 @@ public class TreasuryService {
     }
 
     private record Balances(
-            BigDecimal bankCash, BigDecimal centralBankReserves, BigDecimal loansReceivable,
+            BigDecimal bankCash, BigDecimal centralBankReserves, BigDecimal loansReceivable, BigDecimal loanLossProvision,
             BigDecimal customerDeposits, BigDecimal capitalBase) {
+
+        /** Loan book at its net carrying amount - gross receivables less the loan-loss provision contra-asset. */
+        BigDecimal netLoans() {
+            return loansReceivable.subtract(loanLossProvision);
+        }
     }
 }

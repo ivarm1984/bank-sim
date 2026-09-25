@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,9 +19,13 @@ import io.github.ivarm1984.banksim.centralbank.CentralBankService;
 import io.github.ivarm1984.banksim.clock.ClockService;
 import io.github.ivarm1984.banksim.customer.Customer;
 import io.github.ivarm1984.banksim.customer.CustomerService;
+import io.github.ivarm1984.banksim.ledger.EntryType;
+import io.github.ivarm1984.banksim.ledger.JournalEntryRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
+import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
 import io.github.ivarm1984.banksim.ledger.LedgerReconciliationService;
+import io.github.ivarm1984.banksim.ledger.LedgerService;
 import io.github.ivarm1984.banksim.loan.LoanService;
 import io.github.ivarm1984.banksim.loan.LoanType;
 import io.github.ivarm1984.banksim.policy.PolicyLevers;
@@ -53,6 +58,8 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
     private CentralBankService centralBankService;
     @Autowired
     private PolicyLevers policyLevers;
+    @Autowired
+    private LedgerService ledgerService;
 
     private Account openAccount() {
         Customer customer = customerService.create("Grace Hopper");
@@ -81,8 +88,8 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         BigDecimal hqla = snapshot.bankCash().add(snapshot.centralBankReserves());
         BigDecimal availableStableFunding =
                 snapshot.capitalBase().add(snapshot.customerDeposits().multiply(TreasuryService.NSFR_DEPOSIT_ASF_FACTOR));
-        BigDecimal requiredStableFunding = snapshot.loansReceivable().multiply(TreasuryService.NSFR_LOAN_RSF_FACTOR);
-        BigDecimal riskWeightedAssets = snapshot.loansReceivable().multiply(TreasuryService.LOAN_RISK_WEIGHT);
+        BigDecimal requiredStableFunding = snapshot.netLoans().multiply(TreasuryService.NSFR_LOAN_RSF_FACTOR);
+        BigDecimal riskWeightedAssets = snapshot.netLoans().multiply(TreasuryService.LOAN_RISK_WEIGHT);
 
         assertThat(snapshot.requiredReserves()).isEqualByComparingTo(requiredReserves);
         assertThat(snapshot.loanToDepositRatio())
@@ -137,7 +144,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         // 100,000 deposits need 10,000 of HQLA (10% outflow assumption) but
         // only 1,000 of cash/reserves are on hand - hqla headroom is -9,000.
         TreasuryRatioSnapshot breach = new TreasuryRatioSnapshot(
-                null, LocalDate.of(2091, 1, 1), BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO,
+                null, LocalDate.of(2091, 1, 1), BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO, BigDecimal.ZERO,
                 new BigDecimal("100000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("1000.00"), null, null, null);
         treasuryService.applyFeedback(breach);
 
@@ -153,7 +160,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         // run order, so the assertions below don't depend on starting from
         // an assumed-zero facility balance.
         TreasuryRatioSnapshot healthy = new TreasuryRatioSnapshot(
-                null, LocalDate.of(2091, 1, 2), BigDecimal.ZERO, new BigDecimal("10000000.00"), BigDecimal.ZERO,
+                null, LocalDate.of(2091, 1, 2), BigDecimal.ZERO, new BigDecimal("10000000.00"), BigDecimal.ZERO, BigDecimal.ZERO,
                 new BigDecimal("1000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("100.00"), null, null, null);
         treasuryService.applyFeedback(healthy);
 
@@ -176,7 +183,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
     void capitalBreachThrottlesLoanOriginationUntilRatiosRecover() {
         try {
             treasuryRatioRepository.insert(
-                    LocalDate.of(2092, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                    LocalDate.of(2092, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                     null, null, new BigDecimal("0.500000"), BigDecimal.ZERO, null, new BigDecimal("0.010000"));
 
             assertThat(treasuryService.isLoanOriginationThrottled()).isTrue();
@@ -185,7 +192,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
                     .isInstanceOf(IllegalStateException.class);
         } finally {
             treasuryRatioRepository.insert(
-                    LocalDate.of(2092, 1, 2), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                    LocalDate.of(2092, 1, 2), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                     null, null, new BigDecimal("10.000000"), BigDecimal.ZERO, null, new BigDecimal("1.000000"));
         }
         assertThat(treasuryService.isLoanOriginationThrottled()).isFalse();
@@ -194,7 +201,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
     @Test
     void borrowingInterestAccruesDailyAtTheMarginalLendingRate() {
         TreasuryRatioSnapshot breach = new TreasuryRatioSnapshot(
-                null, LocalDate.of(2093, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                null, LocalDate.of(2093, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 new BigDecimal("500000.00"), BigDecimal.ZERO, null, null, null, BigDecimal.ZERO, null, null, null);
         treasuryService.applyFeedback(breach);
         BigDecimal outstandingBefore = ledgerAccountService.singletonCreditBalance(LedgerAccountType.CENTRAL_BANK_BORROWINGS);
@@ -225,7 +232,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         PolicyLeversSnapshot original = policyLevers.state();
         try {
             treasuryRatioRepository.insert(
-                    LocalDate.of(2094, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                    LocalDate.of(2094, 1, 1), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                     null, null, new BigDecimal("1.050000"), BigDecimal.ZERO, null, new BigDecimal("0.090000"));
             assertThat(treasuryService.isLoanOriginationThrottled()).isFalse();
 
@@ -238,7 +245,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         } finally {
             policyLevers.update(original);
             treasuryRatioRepository.insert(
-                    LocalDate.of(2094, 1, 2), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                    LocalDate.of(2094, 1, 2), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                     null, null, new BigDecimal("10.000000"), BigDecimal.ZERO, null, new BigDecimal("1.000000"));
         }
     }
@@ -256,7 +263,7 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
 
             // Same shortfall shape as liquidityBreachTriggersAnAutoBorrowAndRecoveryRepaysItBack.
             TreasuryRatioSnapshot breach = new TreasuryRatioSnapshot(
-                    null, LocalDate.of(2095, 1, 2), BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO,
+                    null, LocalDate.of(2095, 1, 2), BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO, BigDecimal.ZERO,
                     new BigDecimal("100000.00"), BigDecimal.ZERO, null, null, null, new BigDecimal("1000.00"), null, null, null);
             treasuryService.applyFeedback(breach);
 
@@ -269,5 +276,44 @@ class TreasuryServiceTest extends PostgresIntegrationTest {
         } finally {
             policyLevers.update(original);
         }
+    }
+
+    /**
+     * A provision charge is an expense (lowers the capital base) against a
+     * contra-asset (lowers the net loan book CAR/NSFR are computed on) - so
+     * a recession's provisioning shows up in the ratios, not just the ledger.
+     */
+    @Test
+    void aProvisionChargeLowersTheCapitalBaseAndTheNetLoanBook() {
+        Account account = openAccount();
+        loanService.originateAndDisburse(account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("1000.00"), 12);
+        TreasuryRatioSnapshot before = treasuryService.computeAndPersist(LocalDate.of(2030, 4, 1));
+
+        BigDecimal charge = new BigDecimal("250.00");
+        postProvision(charge, EntryType.DEBIT);
+        try {
+            TreasuryRatioSnapshot after = treasuryService.computeAndPersist(LocalDate.of(2030, 4, 2));
+
+            assertThat(before.capitalBase().subtract(after.capitalBase())).isEqualByComparingTo(charge);
+            assertThat(after.loanLossProvision().subtract(before.loanLossProvision())).isEqualByComparingTo(charge);
+            assertThat(after.loansReceivable()).isEqualByComparingTo(before.loansReceivable());
+            assertThat(after.capitalAdequacyRatio()).isEqualByComparingTo(
+                    after.capitalBase().divide(after.netLoans().multiply(TreasuryService.LOAN_RISK_WEIGHT), SCALE, RoundingMode.HALF_UP));
+        } finally {
+            postProvision(charge, EntryType.CREDIT);
+        }
+        assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
+    }
+
+    /** DEBIT charges a provision (Debit PROVISION_EXPENSE / Credit LOAN_LOSS_PROVISION), CREDIT releases it. */
+    private void postProvision(BigDecimal amount, EntryType expenseSide) {
+        long expenseId = ledgerAccountService.getSingleton(LedgerAccountType.PROVISION_EXPENSE).id();
+        long provisionId = ledgerAccountService.getSingleton(LedgerAccountType.LOAN_LOSS_PROVISION).id();
+        EntryType provisionSide = expenseSide == EntryType.DEBIT ? EntryType.CREDIT : EntryType.DEBIT;
+        ledgerService.post(new JournalEntryRequest(
+                "Test provision " + expenseSide,
+                List.of(
+                        new LedgerLineRequest(expenseId, expenseSide, amount),
+                        new LedgerLineRequest(provisionId, provisionSide, amount))));
     }
 }

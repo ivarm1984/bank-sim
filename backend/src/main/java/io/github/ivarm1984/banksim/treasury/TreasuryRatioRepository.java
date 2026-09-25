@@ -20,7 +20,7 @@ public class TreasuryRatioRepository {
 
     public TreasuryRatioSnapshot insert(
             LocalDate snapshotDate, BigDecimal bankCash, BigDecimal centralBankReserves, BigDecimal loansReceivable,
-            BigDecimal customerDeposits, BigDecimal capitalBase, BigDecimal loanToDepositRatio,
+            BigDecimal loanLossProvision, BigDecimal customerDeposits, BigDecimal capitalBase, BigDecimal loanToDepositRatio,
             BigDecimal liquidityCoverageRatio, BigDecimal netStableFundingRatio, BigDecimal requiredReserves,
             BigDecimal reserveCoverageRatio, BigDecimal capitalAdequacyRatio) {
         var record = dsl.insertInto(RATIO_SNAPSHOTS)
@@ -28,6 +28,7 @@ public class TreasuryRatioRepository {
                 .set(RATIO_SNAPSHOTS.BANK_CASH, bankCash)
                 .set(RATIO_SNAPSHOTS.CENTRAL_BANK_RESERVES, centralBankReserves)
                 .set(RATIO_SNAPSHOTS.LOANS_RECEIVABLE, loansReceivable)
+                .set(RATIO_SNAPSHOTS.LOAN_LOSS_PROVISION, loanLossProvision)
                 .set(RATIO_SNAPSHOTS.CUSTOMER_DEPOSITS, customerDeposits)
                 .set(RATIO_SNAPSHOTS.CAPITAL_BASE, capitalBase)
                 .set(RATIO_SNAPSHOTS.LOAN_TO_DEPOSIT_RATIO, loanToDepositRatio)
@@ -58,6 +59,7 @@ public class TreasuryRatioRepository {
                 record.getBankCash(),
                 record.getCentralBankReserves(),
                 record.getLoansReceivable(),
+                record.getLoanLossProvision(),
                 record.getCustomerDeposits(),
                 record.getCapitalBase(),
                 record.getLoanToDepositRatio(),

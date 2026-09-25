@@ -9,6 +9,7 @@ import java.util.Random;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.ivarm1984.banksim.PostgresIntegrationTest;
 import io.github.ivarm1984.banksim.account.Account;
@@ -18,8 +19,9 @@ import io.github.ivarm1984.banksim.customer.Customer;
 import io.github.ivarm1984.banksim.customer.CustomerService;
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
 import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
+import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
 import io.github.ivarm1984.banksim.ledger.LedgerReconciliationService;
-import io.github.ivarm1984.banksim.ledger.LedgerService;
+import io.github.ivarm1984.banksim.transaction.TransactionService;
 
 /**
  * {@code LoanPhaseTransitionService.rollDailyTransitions} always targets
@@ -39,9 +41,13 @@ class LoanPhaseTransitionServiceTest extends PostgresIntegrationTest {
     @Autowired
     private LoanRepository loanRepository;
     @Autowired
-    private LedgerService ledgerService;
+    private LoanProvisionPoster provisionPoster;
+    @Autowired
+    private TransactionTemplate transactionTemplate;
     @Autowired
     private LedgerAccountService ledgerAccountService;
+    @Autowired
+    private TransactionService transactionService;
     @Autowired
     private DomainEventPublisher events;
     @Autowired
@@ -76,7 +82,7 @@ class LoanPhaseTransitionServiceTest extends PostgresIntegrationTest {
         LoanAccount loan = originateBusinessLoan(new BigDecimal("100000.00"));
 
         LoanPhaseTransitionService alwaysDowngrades =
-                new LoanPhaseTransitionService(loanRepository, ledgerService, ledgerAccountService, events, alwaysRolls(0.0));
+                new LoanPhaseTransitionService(loanRepository, provisionPoster, events, transactionTemplate, alwaysRolls(0.0));
 
         alwaysDowngrades.rollDailyTransitions(LocalDate.of(2026, 6, 1), false);
         LoanAccount underperforming = loanService.findById(loan.id());
@@ -92,7 +98,7 @@ class LoanPhaseTransitionServiceTest extends PostgresIntegrationTest {
 
         // 0.005 misses both downgrade thresholds (baseline 0.0005, recession 0.004) but hits recovery (0.01).
         LoanPhaseTransitionService alwaysRecovers =
-                new LoanPhaseTransitionService(loanRepository, ledgerService, ledgerAccountService, events, alwaysRolls(0.005));
+                new LoanPhaseTransitionService(loanRepository, provisionPoster, events, transactionTemplate, alwaysRolls(0.005));
 
         alwaysRecovers.rollDailyTransitions(LocalDate.of(2026, 6, 3), false);
         LoanAccount backToUnderperforming = loanService.findById(loan.id());
@@ -124,12 +130,47 @@ class LoanPhaseTransitionServiceTest extends PostgresIntegrationTest {
                 account.customerId(), account.id(), LoanType.CONSUMER, new BigDecimal("5000.00"), 12);
 
         LoanPhaseTransitionService alwaysDowngrades =
-                new LoanPhaseTransitionService(loanRepository, ledgerService, ledgerAccountService, events, alwaysRolls(0.0));
+                new LoanPhaseTransitionService(loanRepository, provisionPoster, events, transactionTemplate, alwaysRolls(0.0));
         alwaysDowngrades.rollDailyTransitions(LocalDate.of(2026, 6, 1), true);
 
         assertThat(loanService.findById(mortgage.id()).phase()).isEqualTo(LoanPhase.PERFORMING);
         assertThat(loanService.findById(consumer.id()).phase()).isEqualTo(LoanPhase.PERFORMING);
         assertThat(loanService.findById(mortgage.id()).provisionAmount()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(loanService.findById(consumer.id()).provisionAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    /**
+     * A repayment remeasures the provision against the reduced outstanding
+     * principal, and a payoff releases it in full - never stranding it in
+     * LOAN_LOSS_PROVISION. Aggregate singleton balances are safe to diff here:
+     * nothing else posts to them between this test's own before/after reads.
+     */
+    @Test
+    void repaymentRemeasuresTheProvisionAndPayoffReleasesItInFull() {
+        LoanAccount loan = originateBusinessLoan(new BigDecimal("100000.00"));
+        transactionService.deposit(loan.disbursementAccountId(), new BigDecimal("5000.00"));
+
+        LoanPhaseTransitionService alwaysDowngrades =
+                new LoanPhaseTransitionService(loanRepository, provisionPoster, events, transactionTemplate, alwaysRolls(0.0));
+        alwaysDowngrades.rollDailyTransitions(LocalDate.of(2026, 7, 1), true);
+        alwaysDowngrades.rollDailyTransitions(LocalDate.of(2026, 7, 2), true);
+        assertThat(loanService.findById(loan.id()).provisionAmount()).isEqualByComparingTo(new BigDecimal("50000.00"));
+
+        loanService.repay(loan.id(), loan.installmentAmount());
+        LoanAccount afterInstallment = loanService.findById(loan.id());
+        assertThat(afterInstallment.outstandingPrincipal()).isLessThan(new BigDecimal("100000.00"));
+        assertThat(afterInstallment.provisionAmount()).isEqualByComparingTo(
+                LoanPhaseTransitionService.provisionAmount(LoanPhase.NON_PERFORMING, afterInstallment.outstandingPrincipal()));
+        assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
+
+        BigDecimal provisionBefore = ledgerAccountService.singletonCreditBalance(LedgerAccountType.LOAN_LOSS_PROVISION);
+        loanService.repay(loan.id(), new BigDecimal("105000.00"));
+        LoanAccount paidOff = loanService.findById(loan.id());
+        BigDecimal provisionAfter = ledgerAccountService.singletonCreditBalance(LedgerAccountType.LOAN_LOSS_PROVISION);
+
+        assertThat(paidOff.status()).isEqualTo(LoanStatus.PAID_OFF);
+        assertThat(paidOff.provisionAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(provisionBefore.subtract(provisionAfter)).isEqualByComparingTo(afterInstallment.provisionAmount());
+        assertThat(reconciliationService.trialBalance().isBalanced()).isTrue();
     }
 }

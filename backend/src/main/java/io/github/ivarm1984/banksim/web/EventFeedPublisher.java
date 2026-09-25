@@ -9,6 +9,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import io.github.ivarm1984.banksim.agents.BillPaymentFailedEvent;
+import io.github.ivarm1984.banksim.bankhealth.BankHealthUpdatedEvent;
 import io.github.ivarm1984.banksim.clock.DayRolledOverEvent;
 import io.github.ivarm1984.banksim.eventinjector.RateShockTriggeredEvent;
 import io.github.ivarm1984.banksim.eventinjector.RecessionEndedEvent;
@@ -18,14 +19,16 @@ import io.github.ivarm1984.banksim.loan.LoanOriginatedEvent;
 import io.github.ivarm1984.banksim.loan.LoanPhaseChangedEvent;
 import io.github.ivarm1984.banksim.loan.LoanRepaidEvent;
 import io.github.ivarm1984.banksim.transaction.TransactionCompletedEvent;
+import io.github.ivarm1984.banksim.treasury.TreasuryRatiosUpdatedEvent;
 
 /**
  * Bridges domain events onto {@code /topic/events} for the dashboard's live
- * event feed. {@code fallbackExecution = true} is required: only
- * {@link TransactionCompletedEvent} is published from inside a Spring
- * transaction (so it can wait for {@code AFTER_COMMIT}) - the clock/agent/
- * interest events are published outside of one, and without the fallback
- * flag those listeners would silently never run.
+ * event feed. {@code fallbackExecution = true} is required:
+ * some events (transactions, treasury ratios, bank health, loan events) are
+ * published from inside a Spring transaction (so they wait for
+ * {@code AFTER_COMMIT}) - the clock/agent/interest events are published
+ * outside of one, and without the fallback flag those listeners would
+ * silently never run.
  */
 @Component
 public class EventFeedPublisher {
@@ -94,6 +97,25 @@ public class EventFeedPublisher {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onLoanPhaseChanged(LoanPhaseChangedEvent event) {
         send("LOAN_PHASE_CHANGED", event);
+    }
+
+    /**
+     * The end of the EOD chain's treasury step - unlike {@code DAY_ROLLED_OVER}
+     * (sent as soon as the clock crosses midnight, while interest -> statements
+     * -> treasury -> bank health are still running synchronously), a reload
+     * off this sees the day's committed snapshot.
+     */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onTreasuryRatiosUpdated(TreasuryRatiosUpdatedEvent event) {
+        send("TREASURY_RATIOS_UPDATED", event);
+    }
+
+    /** Last step of the EOD chain - see {@link #onTreasuryRatiosUpdated}. */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onBankHealthUpdated(BankHealthUpdatedEvent event) {
+        send("BANK_HEALTH_UPDATED", event);
     }
 
     private void send(String type, Object payload) {

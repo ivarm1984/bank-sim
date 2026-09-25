@@ -89,6 +89,7 @@ export interface TreasuryRatioSnapshot {
   bankCash: number
   centralBankReserves: number
   loansReceivable: number
+  loanLossProvision: number
   customerDeposits: number
   capitalBase: number
   loanToDepositRatio: number | null

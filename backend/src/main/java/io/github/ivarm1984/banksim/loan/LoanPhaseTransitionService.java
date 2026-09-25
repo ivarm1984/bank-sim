@@ -3,22 +3,15 @@ package io.github.ivarm1984.banksim.loan;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Random;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.ivarm1984.banksim.event.DomainEventPublisher;
-import io.github.ivarm1984.banksim.ledger.EntryType;
-import io.github.ivarm1984.banksim.ledger.JournalEntryRequest;
-import io.github.ivarm1984.banksim.ledger.LedgerAccountService;
-import io.github.ivarm1984.banksim.ledger.LedgerAccountType;
-import io.github.ivarm1984.banksim.ledger.LedgerLineRequest;
-import io.github.ivarm1984.banksim.ledger.LedgerService;
 
 /**
  * Daily loan-loss provisioning phase state machine for {@link LoanType#BUSINESS}
@@ -55,36 +48,55 @@ public class LoanPhaseTransitionService {
     static final BigDecimal NON_PERFORMING_PROVISION_RATE = new BigDecimal("0.50");
 
     private final LoanRepository loanRepository;
-    private final LedgerService ledgerService;
-    private final LedgerAccountService ledgerAccountService;
+    private final LoanProvisionPoster provisionPoster;
     private final DomainEventPublisher events;
+    private final TransactionTemplate transactionTemplate;
     private final Random random;
 
     @Autowired
     public LoanPhaseTransitionService(
-            LoanRepository loanRepository, LedgerService ledgerService, LedgerAccountService ledgerAccountService,
-            DomainEventPublisher events) {
-        this(loanRepository, ledgerService, ledgerAccountService, events, new Random());
+            LoanRepository loanRepository, LoanProvisionPoster provisionPoster, DomainEventPublisher events,
+            TransactionTemplate transactionTemplate) {
+        this(loanRepository, provisionPoster, events, transactionTemplate, new Random());
     }
 
     /** Test seam - lets tests force/deny transitions deterministically. */
     LoanPhaseTransitionService(
-            LoanRepository loanRepository, LedgerService ledgerService, LedgerAccountService ledgerAccountService,
-            DomainEventPublisher events, Random random) {
+            LoanRepository loanRepository, LoanProvisionPoster provisionPoster, DomainEventPublisher events,
+            TransactionTemplate transactionTemplate, Random random) {
         this.loanRepository = loanRepository;
-        this.ledgerService = ledgerService;
-        this.ledgerAccountService = ledgerAccountService;
+        this.provisionPoster = provisionPoster;
         this.events = events;
+        this.transactionTemplate = transactionTemplate;
         this.random = random;
     }
 
-    @Transactional
+    /**
+     * One transaction per loan, not one for the whole book - a failure on one
+     * loan (logged and skipped) never rolls back every other loan's
+     * transition for the day. Each loan's row is re-read under
+     * {@code lockForUpdate} (same lock {@code LoanService.repay} takes) so a
+     * concurrent repayment can't leave the provision computed from a stale
+     * outstanding principal, and a loan paid off since the candidate list was
+     * read is skipped.
+     */
     public void rollDailyTransitions(LocalDate date, boolean recessionActive) {
-        List<LoanAccount> businessLoans = loanRepository.findActiveByLoanType(LoanType.BUSINESS);
-        for (LoanAccount loan : businessLoans) {
-            LoanPhase next = nextPhase(loan.phase(), recessionActive, random.nextDouble(), random.nextDouble());
-            if (next != loan.phase()) {
-                applyTransition(loan, next, date);
+        for (LoanAccount candidate : loanRepository.findActiveByLoanType(LoanType.BUSINESS)) {
+            double downgradeRoll = random.nextDouble();
+            double upgradeRoll = random.nextDouble();
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    LoanAccount loan = loanRepository.lockForUpdate(candidate.id());
+                    if (loan.status() != LoanStatus.ACTIVE) {
+                        return;
+                    }
+                    LoanPhase next = nextPhase(loan.phase(), recessionActive, downgradeRoll, upgradeRoll);
+                    if (next != loan.phase()) {
+                        applyTransition(loan, next, date);
+                    }
+                });
+            } catch (RuntimeException e) {
+                log.warn("Phase transition roll failed for loan {} on {}", candidate.id(), date, e);
             }
         }
     }
@@ -92,19 +104,8 @@ public class LoanPhaseTransitionService {
     private void applyTransition(LoanAccount loan, LoanPhase newPhase, LocalDate date) {
         BigDecimal newProvision = provisionAmount(newPhase, loan.outstandingPrincipal());
         BigDecimal delta = newProvision.subtract(loan.provisionAmount());
-        Long journalEntryId = null;
-        if (delta.signum() != 0) {
-            long expenseId = ledgerAccountService.getSingleton(LedgerAccountType.PROVISION_EXPENSE).id();
-            long provisionId = ledgerAccountService.getSingleton(LedgerAccountType.LOAN_LOSS_PROVISION).id();
-            BigDecimal amount = delta.abs();
-            EntryType expenseSide = delta.signum() > 0 ? EntryType.DEBIT : EntryType.CREDIT;
-            EntryType provisionSide = delta.signum() > 0 ? EntryType.CREDIT : EntryType.DEBIT;
-            journalEntryId = ledgerService.post(new JournalEntryRequest(
-                    "Loan " + loan.id() + " phase " + loan.phase() + " -> " + newPhase + " provision adjustment",
-                    List.of(
-                            new LedgerLineRequest(expenseId, expenseSide, amount),
-                            new LedgerLineRequest(provisionId, provisionSide, amount))));
-        }
+        Long journalEntryId = provisionPoster.post(
+                delta, "Loan " + loan.id() + " phase " + loan.phase() + " -> " + newPhase + " provision adjustment");
 
         loanRepository.updatePhase(loan.id(), newPhase, newProvision);
         loanRepository.insertPhaseHistory(loan.id(), loan.phase(), newPhase, date, delta, journalEntryId);

@@ -40,8 +40,8 @@ public class CentralBankRateSchedule {
     static final BigDecimal INITIAL_POLICY_RATE = new BigDecimal("0.0300");
     static final BigDecimal STEP = new BigDecimal("0.0025");
     static final BigDecimal CORRIDOR_WIDTH = new BigDecimal("0.0025");
-    static final BigDecimal MIN_POLICY_RATE = BigDecimal.ZERO;
-    static final BigDecimal MAX_POLICY_RATE = new BigDecimal("0.0750");
+    public static final BigDecimal MIN_POLICY_RATE = BigDecimal.ZERO;
+    public static final BigDecimal MAX_POLICY_RATE = new BigDecimal("0.0750");
     static final int REVIEW_PERIOD_DAYS = 42;
     static final long SEED = 20260101L;
 
@@ -83,8 +83,8 @@ public class CentralBankRateSchedule {
         return 1;
     }
 
-    /** Package-visible so CentralBankService can clamp a rate-shock-adjusted policy rate to the same bounds. */
-    static BigDecimal clamp(BigDecimal rate) {
+    /** Public so CentralBankService/RateShockService can clamp a rate-shock-adjusted policy rate to the same bounds. */
+    public static BigDecimal clamp(BigDecimal rate) {
         if (rate.compareTo(MIN_POLICY_RATE) < 0) {
             return MIN_POLICY_RATE;
         }

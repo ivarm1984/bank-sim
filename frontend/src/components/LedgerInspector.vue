@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { fetchLedgerAccounts, fetchTrialBalance } from '../api/ledger'
 import type { EventFeedMessage, LedgerAccountBalance, TrialBalance } from '../api/types'
 import { subscribe } from '../ws/stompClient'
@@ -12,12 +12,16 @@ async function reload() {
   ;[ledgerAccounts.value, trialBalance.value] = await Promise.all([fetchLedgerAccounts(), fetchTrialBalance()])
 }
 
+let unsubscribe: (() => void) | undefined
+
 onMounted(() => {
   reload()
-  subscribe<EventFeedMessage>('/topic/events', (message) => {
+  unsubscribe = subscribe<EventFeedMessage>('/topic/events', (message) => {
     if (message.type === 'TRANSACTION_COMPLETED' || message.type === 'INTEREST_ACCRUAL_BATCH_COMPLETED') reload()
   })
 })
+
+onUnmounted(() => unsubscribe?.())
 </script>
 
 <template>

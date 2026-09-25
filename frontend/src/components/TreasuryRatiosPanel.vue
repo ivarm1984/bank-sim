@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { fetchTreasuryRatios } from '../api/treasury'
 import type { EventFeedMessage, TreasuryRatioSnapshot } from '../api/types'
 import { subscribe } from '../ws/stompClient'
@@ -11,12 +11,16 @@ async function reload() {
   ratios.value = await fetchTreasuryRatios()
 }
 
+let unsubscribe: (() => void) | undefined
+
 onMounted(() => {
   reload()
-  subscribe<EventFeedMessage>('/topic/events', (message) => {
-    if (message.type === 'DAY_ROLLED_OVER') reload()
+  unsubscribe = subscribe<EventFeedMessage>('/topic/events', (message) => {
+    if (message.type === 'TREASURY_RATIOS_UPDATED') reload()
   })
 })
+
+onUnmounted(() => unsubscribe?.())
 
 const rows = [
   { label: 'Loan-to-deposit ratio', key: 'loanToDepositRatio' as const, minimum: null },

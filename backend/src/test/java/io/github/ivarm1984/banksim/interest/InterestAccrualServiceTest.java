@@ -169,4 +169,20 @@ class InterestAccrualServiceTest extends PostgresIntegrationTest {
             policyLevers.update(original);
         }
     }
+
+    /** A spread deeper than the policy rate floors the savings rate at 0% rather than reporting a negative rate it never applies. */
+    @Test
+    void savingsRateIsFlooredAtZeroWhenTheSpreadExceedsThePolicyRate() {
+        PolicyLeversSnapshot original = policyLevers.state();
+        try {
+            policyLevers.update(new PolicyLeversSnapshot(
+                    new BigDecimal("-0.5000"), original.mortgageSpreadAdjustment(), original.consumerSpreadAdjustment(),
+                    original.businessSpreadAdjustment(), original.targetCapitalBuffer(), original.underwritingLooseness(),
+                    original.autoTapBorrowingFacility()));
+
+            assertThat(interestAccrualService.currentRates().get(AccountType.SAVINGS)).isEqualByComparingTo(BigDecimal.ZERO);
+        } finally {
+            policyLevers.update(original);
+        }
+    }
 }

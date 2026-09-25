@@ -1,0 +1,22 @@
+databaseChangeLog:
+  - changeSet:
+      id: treasury-0003-add-loan-loss-provision
+      author: ivarm1984
+      changes:
+        - addColumn:
+            schemaName: treasury
+            tableName: ratio_snapshots
+            columns:
+              - column:
+                  # Credit balance of the singleton LOAN_LOSS_PROVISION
+                  # contra-asset at snapshot time. loans_receivable stays the
+                  # gross figure; NSFR's required stable funding and CAR's
+                  # risk-weighted assets are computed on the net carrying
+                  # amount (loans_receivable - loan_loss_provision). Existing
+                  # rows default to 0 since this codebase has no production
+                  # data to preserve.
+                  name: loan_loss_provision
+                  type: numeric(19,4)
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
